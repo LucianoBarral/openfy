@@ -31,6 +31,8 @@ O app consulta `https://github.com/LucianoBarral/openfy/releases/latest/download
 
 Em *Actions → Release → Run workflow*, o mesmo processo roda e cria a release como **rascunho**. Serve para conferir os arquivos; publicar o rascunho pela página de releases torna a versão oficial.
 
+> **Atenção:** publicar um rascunho cria a tag `v…`, e isso dispara o workflow de release mais uma vez. Como os arquivos já estão publicados e assinados, cancele essa segunda execução em *Actions* para ela não recompilar e substituir o instalador.
+
 ## A chave de assinatura
 
 O atualizador só aceita pacotes assinados pela chave privada do projeto. A chave pública correspondente está em `src-tauri/tauri.conf.json` (`plugins.updater.pubkey`).
