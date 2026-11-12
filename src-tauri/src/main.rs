@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod catalog;
 mod library;
 mod updater;
 mod ytdl;
@@ -17,15 +18,52 @@ async fn search(query: String) -> Result<Vec<Track>, String> {
     if query.is_empty() {
         return Ok(vec![]);
     }
-    tauri::async_runtime::spawn_blocking(move || ytdl::search(&query, 30))
-        .await
-        .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        or_fallback("busca", catalog::search(&query), || ytdl::search(&query, 30))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 /// Faixas parecidas com `id`, para a reproducao continuar quando a fila acaba.
 #[tauri::command]
 async fn related(id: String) -> Result<Vec<Track>, String> {
-    tauri::async_runtime::spawn_blocking(move || ytdl::related(&id, 30))
+    tauri::async_runtime::spawn_blocking(move || {
+        or_fallback("radio", catalog::radio(&id), || ytdl::related(&id, 30))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Usa a resposta do catalogo; se ele falhar ou vier vazio, cai no yt-dlp.
+///
+/// O catalogo e um servico sem contrato publico: quando ele muda ou sai do ar,
+/// o app continua tocando, so que com os metadados mais pobres do yt-dlp.
+fn or_fallback(
+    what: &str,
+    primary: Result<Vec<Track>, String>,
+    fallback: impl FnOnce() -> Result<Vec<Track>, String>,
+) -> Result<Vec<Track>, String> {
+    match primary {
+        Ok(tracks) if !tracks.is_empty() => Ok(tracks),
+        Ok(_) => fallback(),
+        Err(e) => {
+            eprintln!("catalogo indisponivel na {what} ({e}); usando yt-dlp");
+            fallback()
+        }
+    }
+}
+
+#[tauri::command]
+async fn album(id: String) -> Result<catalog::Album, String> {
+    tauri::async_runtime::spawn_blocking(move || catalog::album(&id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn artist(id: String) -> Result<catalog::Artist, String> {
+    tauri::async_runtime::spawn_blocking(move || catalog::artist(&id))
         .await
         .map_err(|e| e.to_string())?
 }
@@ -122,6 +160,35 @@ fn selftest_report(line: String, app: AppHandle) {
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn t(id: &str) -> Track {
+        Track { id: id.into(), ..Track::default() }
+    }
+
+    #[test]
+    fn catalogo_com_resultado_dispensa_o_yt_dlp() {
+        let got = or_fallback("busca", Ok(vec![t("cat")]), || panic!("nao devia chamar o yt-dlp"));
+        assert_eq!(got.unwrap()[0].id, "cat");
+    }
+
+    #[test]
+    fn catalogo_com_erro_ou_vazio_cai_no_yt_dlp() {
+        let erro = or_fallback("busca", Err("fora do ar".into()), || Ok(vec![t("yt")]));
+        assert_eq!(erro.unwrap()[0].id, "yt");
+        let vazio = or_fallback("radio", Ok(vec![]), || Ok(vec![t("yt")]));
+        assert_eq!(vazio.unwrap()[0].id, "yt");
+    }
+
+    #[test]
+    fn os_dois_falhando_devolve_o_erro_do_yt_dlp() {
+        let got = or_fallback("busca", Err("catalogo".into()), || Err("yt-dlp".into()));
+        assert_eq!(got.unwrap_err(), "yt-dlp");
+    }
+}
+
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_updater::Builder::new().build())
@@ -137,6 +204,8 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             search,
             related,
+            album,
+            artist,
             resolve_stream,
             suggest,
             get_library,

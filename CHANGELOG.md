@@ -5,6 +5,19 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Não lançado]
 
+### Adicionado
+
+- Catálogo de músicas: a busca e o rádio agora trazem título, artista, álbum e
+  capa quadrada de verdade, sem "(Official Video)" nem resultados repetidos.
+- Página de álbum, com capa, ano e a lista de faixas.
+- Página de artista, com as músicas populares, álbuns, singles e EPs.
+- Artista e álbum clicáveis em cada faixa e no player.
+
+### Alterado
+
+- A busca devolve 20 resultados (antes eram 30). Se o catálogo falhar, o app
+  volta sozinho para a busca do yt-dlp e continua tocando.
+
 ## [0.1.0]
 
 Primeira versão pública.

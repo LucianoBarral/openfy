@@ -8,13 +8,24 @@ use std::process::Command;
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 pub struct Track {
     pub id: String,
     pub title: String,
     pub artist: String,
     /// Segundos. `None` quando o yt-dlp nao informa (lives, por exemplo).
     pub duration: Option<f64>,
+    // Os campos abaixo so existem para faixas vindas do catalogo. Sao opcionais
+    // para que bibliotecas salvas antes deles continuem abrindo.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub album_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub artist_id: Option<String>,
+    /// URL da capa quadrada. Sem ela, a interface usa a miniatura do video.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cover: Option<String>,
 }
 
 /// URLs do googlevideo expiram em ~6h; guardamos por 3h para ter folga.
@@ -171,6 +182,7 @@ pub fn parse_search(json: &str) -> Result<Vec<Track>, String> {
                 title: e["title"].as_str()?.to_string(),
                 artist,
                 duration: e["duration"].as_f64(),
+                ..Track::default()
             })
         })
         .filter(is_music_result)

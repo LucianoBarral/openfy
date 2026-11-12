@@ -87,6 +87,8 @@ function h(tag, attrs, ...kids) {
 }
 
 const thumb = (id) => `https://i.ytimg.com/vi/${id}/mqdefault.jpg`;
+// Faixas do catalogo trazem a capa quadrada do album; as demais usam o quadro do video.
+const cover = (track) => track.cover || thumb(track.id);
 
 function fmt(sec) {
   if (!Number.isFinite(sec) || sec < 0) return '0:00';
@@ -520,10 +522,15 @@ function renderPlayer() {
   img.hidden = !t;
   if (t && img.dataset.id !== t.id) {
     img.dataset.id = t.id;
-    img.src = thumb(t.id);
+    img.src = cover(t);
   }
   $('now-title').textContent = t ? t.title : '';
-  $('now-artist').textContent = t ? t.artist : '';
+  const by = $('now-artist');
+  const byKey = t ? t.id : '';
+  if (by.dataset.id !== byKey) {
+    by.dataset.id = byKey;
+    by.replaceChildren(...(t ? credits(t) : []));
+  }
 
   const like = $('now-like');
   like.hidden = !t;
@@ -602,7 +609,7 @@ function updateMediaSession() {
   navigator.mediaSession.metadata = new MediaMetadata({
     title: t.title,
     artist: t.artist,
-    artwork: [{ src: thumb(t.id), sizes: '320x180', type: 'image/jpeg' }],
+    artwork: [{ src: cover(t) }],
   });
 }
 if ('mediaSession' in navigator) {
@@ -631,6 +638,25 @@ document.addEventListener('keydown', (e) => {
 });
 
 /* ---------- lista de faixas ---------- */
+/** Nome que leva a uma pagina quando o catalogo deu o id; texto simples caso contrario. */
+function linkTo(text, route) {
+  if (!route) return h('span', null, text);
+  return h('button', {
+    class: 'ref',
+    onclick: (e) => { e.stopPropagation(); go(route); },
+    ondblclick: (e) => e.stopPropagation(),
+  }, text);
+}
+
+/** "Artista • Album" da faixa. `ctx.album` omite o album (a pagina ja e dele). */
+function credits(track, ctx) {
+  const parts = [linkTo(track.artist, track.artist_id && { name: 'artist', id: track.artist_id })];
+  if (track.album && !(ctx && ctx.album)) {
+    parts.push(h('span', { class: 'sep' }, '•'), linkTo(track.album, track.album_id && { name: 'album', id: track.album_id }));
+  }
+  return parts;
+}
+
 function trackRow(track, i, list, ctx) {
   const liked = isLiked(track.id);
   // Na busca, a escolha e so aquela faixa; o radio continua com musicas parecidas.
@@ -642,10 +668,10 @@ function trackRow(track, i, list, ctx) {
       h('span', null, i + 1),
       h('span', { class: 't-play', icon: 'play' })),
     h('div', { class: 't-main' },
-      h('img', { class: 't-thumb', src: thumb(track.id), alt: '', loading: 'lazy' }),
+      h('img', { class: 't-thumb', src: cover(track), alt: '', loading: 'lazy' }),
       h('div', { class: 't-text' },
         h('div', { class: 't-title' }, track.title),
-        h('div', { class: 't-artist' }, track.artist))),
+        h('div', { class: 't-artist credits' }, credits(track, ctx)))),
     h('button', {
       class: `icon-btn t-like${liked ? ' on' : ''}`,
       icon: liked ? 'heartOn' : 'heart',
@@ -663,7 +689,9 @@ function trackRow(track, i, list, ctx) {
 }
 
 function trackList(tracks, ctx) {
-  return h('div', { class: 'tracks' },
+  // Ha listas do catalogo sem duracao (as populares do artista): a coluna some em vez de mostrar tracos.
+  const timed = tracks.some((t) => t.duration);
+  return h('div', { class: timed ? 'tracks' : 'tracks no-dur' },
     h('div', { class: 't-head' },
       h('div', { class: 't-num' }, '#'),
       h('div', null, 'Título'),
@@ -738,7 +766,7 @@ function viewHome() {
     page.append(h('div', { class: 'cards' },
       hist.slice(0, 12).map((t, i) =>
         h('button', { class: 'card', title: `Tocar ${t.title}`, onclick: () => playFrom([t], 0), ...hoverWarm(t) },
-          h('img', { src: thumb(t.id), alt: '', loading: 'lazy' }),
+          h('img', { src: cover(t), alt: '', loading: 'lazy' }),
           h('span', { class: 'card-play', icon: 'play' }),
           h('div', { class: 'card-title' }, t.title),
           h('div', { class: 'card-sub' }, t.artist)))));
@@ -780,9 +808,9 @@ function playButton(tracks) {
   });
 }
 
-function hero({ art, title, meta, hue }) {
+function hero({ art, title, meta, hue, kind = 'Playlist' }) {
   const el = h('div', { class: 'hero' }, art, h('div', { class: 'hero-info' },
-    h('div', { class: 'hero-kind' }, 'Playlist'), title, h('div', { class: 'hero-meta' }, meta)));
+    h('div', { class: 'hero-kind' }, kind), title, h('div', { class: 'hero-meta' }, meta)));
   el.style.setProperty('--hero', hue);
   return el;
 }
@@ -873,8 +901,101 @@ function enqueueOrStart(track) {
   else enqueue(track, false);
 }
 
+/* ---------- paginas do catalogo (album e artista) ---------- */
+// "album:ID" / "artist:ID" -> { status, data, error }. Guardar a resposta deixa o
+// "voltar" instantaneo e evita buscar de novo a cada redesenho da tela.
+const pages = new Map();
+
+function loadPage(kind, id) {
+  const key = `${kind}:${id}`;
+  let page = pages.get(key);
+  if (!page) {
+    page = { status: 'loading', data: null, error: '' };
+    pages.set(key, page);
+    invoke(kind, { id })
+      .then((data) => { page.status = 'done'; page.data = data; })
+      .catch((e) => { page.status = 'error'; page.error = String(e); })
+      .then(() => { if (routeKey(state.route) === key) renderView(); });
+  }
+  return page;
+}
+
+/** Tela de espera ou de erro enquanto a pagina do catalogo nao chegou. */
+function pagePending(page, kind, id, what) {
+  if (page.status === 'loading') {
+    return h('div', { class: 'page' }, h('div', { class: 'spinner', role: 'progressbar' }));
+  }
+  const retry = () => { pages.delete(`${kind}:${id}`); renderView(); };
+  return h('div', { class: 'page' },
+    h('h1', null, `Não foi possível abrir ${what}`),
+    h('div', { class: 'error-box' }, h('strong', null, 'O catálogo respondeu com erro'), page.error),
+    h('button', { class: 'pill', onclick: retry }, 'Tentar de novo'));
+}
+
+/** Capa grande do topo; sem imagem, cai no bloco colorido com icone. */
+function heroArt(url, round = false) {
+  const cls = `hero-art${round ? ' round' : ''}`;
+  return url ? h('img', { class: cls, src: url, alt: '' }) : h('div', { class: cls, icon: 'note' });
+}
+
+function viewAlbum(id) {
+  const page = loadPage('album', id);
+  if (page.status !== 'done') return pagePending(page, 'album', id, 'o álbum');
+  const album = page.data;
+  const meta = [linkTo(album.artist, album.artist_id && { name: 'artist', id: album.artist_id })];
+  if (album.year) meta.push(` • ${album.year}`);
+  meta.push(` • ${listMeta(album.tracks)}`);
+  const frag = h('div', null,
+    hero({
+      kind: 'Álbum',
+      art: heroArt(album.cover),
+      title: h('div', { class: 'hero-title', title: album.title }, album.title),
+      meta,
+      hue: hueOf(album.id),
+    }),
+    h('div', { class: 'actions' }, playButton(album.tracks)));
+  frag.append(album.tracks.length
+    ? trackList(album.tracks, { album: true })
+    : h('div', { class: 'empty' }, h('strong', null, 'Este álbum veio sem faixas'),
+        'O catálogo não listou as músicas dele.'));
+  return frag;
+}
+
+function releaseCard(item) {
+  return h('button', { class: 'card', title: item.title, onclick: () => go({ name: 'album', id: item.id }) },
+    item.cover ? h('img', { src: item.cover, alt: '', loading: 'lazy' }) : h('div', { class: 'card-blank', icon: 'note' }),
+    h('div', { class: 'card-title' }, item.title),
+    h('div', { class: 'card-sub' }, item.subtitle));
+}
+
+function viewArtist(id) {
+  const page = loadPage('artist', id);
+  if (page.status !== 'done') return pagePending(page, 'artist', id, 'o artista');
+  const artist = page.data;
+  const frag = h('div', null,
+    hero({
+      kind: 'Artista',
+      art: heroArt(artist.cover, true),
+      title: h('div', { class: 'hero-title', title: artist.name }, artist.name),
+      meta: artist.top.length ? `${countLabel(artist.top.length)} em destaque` : '',
+      hue: hueOf(artist.id),
+    }),
+    h('div', { class: 'actions' }, playButton(artist.top)));
+  const body = h('div', { class: 'page' });
+  if (artist.top.length) body.append(h('h2', null, 'Populares'), trackList(artist.top));
+  artist.shelves.forEach((shelf) => {
+    body.append(h('h2', null, shelf.title), h('div', { class: 'cards' }, shelf.items.map(releaseCard)));
+  });
+  if (!artist.top.length && !artist.shelves.length) {
+    body.append(h('div', { class: 'empty' }, h('strong', null, 'Nada para mostrar'),
+      'O catálogo não trouxe músicas nem lançamentos deste artista.'));
+  }
+  frag.append(body);
+  return frag;
+}
+
 function routeKey(r) {
-  return r.name === 'playlist' ? `playlist:${r.id}` : r.name === 'search' ? `search:${state.search.query}` : r.name;
+  return r.id ? `${r.name}:${r.id}` : r.name === 'search' ? `search:${state.search.query}` : r.name;
 }
 
 function renderView() {
@@ -886,6 +1007,8 @@ function renderView() {
   const node = r.name === 'search' ? viewSearch()
     : r.name === 'liked' ? viewLiked()
     : r.name === 'playlist' ? viewPlaylist(r.id)
+    : r.name === 'album' ? viewAlbum(r.id)
+    : r.name === 'artist' ? viewArtist(r.id)
     : viewHome();
   view.replaceChildren(node);
   view.scrollTop = keep;
@@ -904,7 +1027,7 @@ $('btn-home').addEventListener('click', () => go({ name: 'home' }));
 /* ---------- fila ---------- */
 function queueItem(track, onclick) {
   return h('button', { class: 'q-item', 'data-id': track.id, title: `Tocar ${track.title}`, onclick, ...hoverWarm(track) },
-    h('img', { src: thumb(track.id), alt: '', loading: 'lazy' }),
+    h('img', { src: cover(track), alt: '', loading: 'lazy' }),
     h('div', { class: 't-text' },
       h('div', { class: 't-title' }, track.title),
       h('div', { class: 't-artist' }, track.artist)));
@@ -1129,6 +1252,7 @@ async function selftest() {
       return;
     }
     await report(`SEARCH n=${s.results.length} first=${s.results[0].title} | ${s.results[0].artist}`);
+    await selftestCatalog(report, s.results).catch((e) => report(`CATALOG exception ${e}`));
     playFrom(s.results, 0);
     const timer = setInterval(() => {
       const ms = Date.now() - t0;
@@ -1151,6 +1275,60 @@ async function selftest() {
   } catch (e) {
     await report(`FAIL exception ${e}`);
   }
+}
+
+/** Confere os metadados do catalogo e abre de verdade as paginas de album e artista. */
+async function selftestCatalog(report, results) {
+  const count = (f) => results.filter(f).length;
+  const first = results[0];
+  await report(`CATALOG n=${results.length} cover=${count((t) => t.cover)} album=${count((t) => t.album_id)} artistId=${count((t) => t.artist_id)} dur=${count((t) => t.duration)} first=${first.title} | ${first.artist} | ${first.album} | ${first.cover ? new URL(first.cover).hostname : 'sem-capa'}`);
+  const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+  const settle = async (key) => {
+    for (let i = 0; i < 150 && (pages.get(key) || {}).status === 'loading'; i += 1) await new Promise((r) => setTimeout(r, 100));
+    return pages.get(key) || { status: 'ausente' };
+  };
+  const rowLinks = document.querySelectorAll('.track .t-artist .ref').length;
+  const withAlbum = results.find((t) => t.album_id);
+  if (withAlbum) {
+    document.querySelector(`.track[data-id="${withAlbum.id}"] .t-artist .ref:last-child`).click();
+    const p = await settle(`album:${withAlbum.album_id}`);
+    const a = p.data || {};
+    await report(`ALBUM route=${state.route.name} status=${p.status} error=${p.error} title=${a.title} artist=${a.artist} year=${a.year} tracks=${(a.tracks || []).length} rows=${document.querySelectorAll('.track').length} heroImg=${!!document.querySelector('img.hero-art')} kind=${(document.querySelector('.hero-kind') || {}).textContent} rowLinks=${rowLinks}`);
+    await pause(2500); // tempo para a captura de tela pegar a pagina
+    // Uma faixa vinda da pagina do album toca? E o artista no player leva a pagina dele?
+    const heard = new Promise((resolve) => {
+      const limit = setTimeout(() => resolve(false), 40000);
+      audio.addEventListener('playing', () => { clearTimeout(limit); resolve(true); }, { once: true });
+    });
+    document.querySelector('#view .track .t-num').click();
+    const played = await heard;
+    const nowRefs = document.querySelectorAll('#now-artist .ref');
+    if (nowRefs[0]) nowRefs[0].click();
+    const nowAlbum = nowRefs[1] ? Math.round(nowRefs[1].getBoundingClientRect().width) : 0;
+    await report(`ALBUM-PLAY nowAlbumPx=${nowAlbum} played=${played} now=${state.current && state.current.title} nowCover=${new URL($('now-thumb').src).hostname} nowRefs=${nowRefs.length} routeAfterPlayerArtist=${state.route.name}:${state.route.id}`);
+  } else {
+    await report(`ALBUM skipped rowLinks=${rowLinks}`);
+  }
+  const withArtist = results.find((t) => t.artist_id);
+  if (withArtist) {
+    go({ name: 'artist', id: withArtist.artist_id });
+    const p = await settle(`artist:${withArtist.artist_id}`);
+    const a = p.data || {};
+    await report(`ARTIST status=${p.status} error=${p.error} name=${a.name} top=${(a.top || []).length} shelves=${(a.shelves || []).map((s) => `${s.title}:${s.items.length}`).join(',')} rows=${document.querySelectorAll('.track').length} cards=${document.querySelectorAll('.card').length} heroImg=${!!document.querySelector('img.hero-art')}`);
+    await pause(2500);
+  } else {
+    await report('ARTIST skipped');
+  }
+  // Id que o catalogo recusa: a tela de erro aparece e "Tentar de novo" busca outra vez?
+  go({ name: 'album', id: 'invalido' });
+  const bad = await settle('album:invalido');
+  const box = document.querySelector('#view .error-box');
+  const retry = document.querySelector('#view .pill');
+  if (retry) retry.click();
+  await report(`PAGE-ERROR status=${bad.status} box=${!!box} text=${box ? box.textContent : ''} retried=${pages.get('album:invalido') !== bad}`);
+  await settle('album:invalido');
+  audio.pause();
+  go({ name: 'search' });
 }
 
 /** Mede clique -> som (faixa fria x pre-carregada) e exercita as sugestoes e a barra da janela. */

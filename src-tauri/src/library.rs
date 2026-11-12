@@ -117,7 +117,7 @@ mod tests {
     use super::*;
 
     fn t(id: &str) -> Track {
-        Track { id: id.into(), title: id.into(), artist: "a".into(), duration: Some(100.0) }
+        Track { id: id.into(), title: id.into(), artist: "a".into(), duration: Some(100.0), ..Track::default() }
     }
 
     #[test]
