@@ -6,7 +6,7 @@
 
 **Player de música para desktop, leve e de código aberto, feito em Rust.**
 
-Busca, fila, rádio automática e biblioteca local — o áudio vem do [yt-dlp](https://github.com/yt-dlp/yt-dlp).
+Busca, páginas de álbum e artista, fila, rádio automática e biblioteca local — o áudio vem do [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
 [![CI](https://github.com/LucianoBarral/openfy/actions/workflows/ci.yml/badge.svg)](https://github.com/LucianoBarral/openfy/actions/workflows/ci.yml)
 [![Última release](https://img.shields.io/github/v/release/LucianoBarral/openfy?label=release)](https://github.com/LucianoBarral/openfy/releases/latest)
@@ -21,13 +21,15 @@ Busca, fila, rádio automática e biblioteca local — o áudio vem do [yt-dlp](
 ## O que ele faz
 
 - **Busca com sugestões** — as sugestões aparecem enquanto você digita; Enter faz a busca completa.
+- **Catálogo de verdade** — cada faixa vem com título, artista, álbum e capa quadrada, sem "(Official Video)" nem resultados repetidos.
+- **Páginas de álbum e de artista** — clique no artista ou no álbum de qualquer faixa (ou no player) para ver a lista de faixas, as músicas populares, os álbuns e os singles.
 - **Play imediato** — a URL de áudio das faixas visíveis é resolvida antes do clique, então a música começa sem espera.
 - **Fila de verdade** — só entra na fila o que você coloca nela ("Tocar a seguir" e "Adicionar à fila").
 - **Rádio automática** — quando a fila acaba, o Openfy continua com faixas parecidas, sem repetir o que já tocou.
 - **Biblioteca local** — músicas curtidas, playlists e histórico ficam em um arquivo JSON no seu computador.
 - **Controles completos** — ordem aleatória, repetir, avançar/voltar, barra de progresso, volume e mudo.
 - **Atualização automática** — cada release nova do GitHub é baixada e instalada sozinha.
-- **Sem conta, sem telemetria** — o app só fala com o yt-dlp e com o GitHub (para se atualizar).
+- **Sem conta, sem telemetria** — o app só fala com o YouTube (catálogo, sugestões e, pelo yt-dlp, o áudio) e com o GitHub (para se atualizar).
 
 ## Instalação
 
@@ -79,7 +81,8 @@ tauri build
 openfy/
 ├── src-tauri/            Backend em Rust (Tauri v2)
 │   ├── src/main.rs       Comandos expostos à interface
-│   ├── src/ytdl.rs       Ponte com o yt-dlp: busca, sugestões, relacionadas, stream
+│   ├── src/catalog.rs    Catálogo do YouTube Music: busca, rádio, álbum e artista
+│   ├── src/ytdl.rs       Ponte com o yt-dlp: stream, sugestões e reserva do catálogo
 │   ├── src/library.rs    Curtidas, playlists e histórico (JSON)
 │   ├── src/updater.rs    Atualização automática
 │   └── tauri.conf.json   Janela, bundle e endpoint de atualização
@@ -97,7 +100,7 @@ cd src-tauri
 cargo test
 ```
 
-Além dos testes de unidade, há um autoteste ponta a ponta que abre o app, busca, toca e relata o que observou:
+Além dos testes de unidade, há um autoteste ponta a ponta que abre o app, busca, toca, visita as páginas de álbum e de artista e relata o que observou:
 
 ```powershell
 $env:OPENFY_SELFTEST = "daft punk"
@@ -126,6 +129,7 @@ O Openfy é um projeto independente, **sem afiliação** com Spotify, YouTube, G
 **Openfy** is a lightweight, open-source desktop music player written in Rust with [Tauri v2](https://tauri.app). Audio is resolved through [yt-dlp](https://github.com/yt-dlp/yt-dlp).
 
 - Search with as-you-type suggestions, instant playback (stream URLs are pre-resolved)
+- Structured catalog (title, artist, album, square cover) with album and artist pages; falls back to yt-dlp search if the catalog is unavailable
 - A real user queue, plus an automatic radio that keeps playing similar tracks without repeats
 - Local library: liked songs, playlists and history, stored as JSON on your machine
 - Signed automatic updates from GitHub Releases; no account, no telemetry
