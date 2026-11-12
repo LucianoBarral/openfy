@@ -14,7 +14,9 @@ Busca, páginas de álbum e artista, fila, rádio automática e biblioteca local
 
 [Baixar](https://github.com/LucianoBarral/openfy/releases/latest) · [Reportar um bug](https://github.com/LucianoBarral/openfy/issues/new/choose) · [Contribuir](CONTRIBUTING.md) · [English](#english)
 
-<img src="docs/screenshot.png" width="860" alt="Janela do Openfy com resultados de busca e uma faixa tocando">
+<img src="docs/screenshot.png" width="860" alt="Janela do Openfy com resultados de busca, cada faixa com artista e álbum, e uma faixa tocando">
+
+<img src="docs/screenshot-album.png" width="426" alt="Página de álbum no Openfy, com capa, ano e lista de faixas"> <img src="docs/screenshot-artist.png" width="426" alt="Página de artista no Openfy, com as músicas populares">
 
 </div>
 
