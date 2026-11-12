@@ -1,0 +1,59 @@
+name: Release
+
+# Publica uma release quando uma tag vX.Y.Z chega ao repositorio.
+# Rodando manualmente (workflow_dispatch) a release nasce como rascunho,
+# para conferir os arquivos antes de publicar.
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    name: Instalador Windows + atualizador
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Conferir tag e versao
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          version=$(sed -n 's/^version *= *"\(.*\)"/\1/p' src-tauri/Cargo.toml | head -n 1)
+          if [ "v$version" != "$GITHUB_REF_NAME" ]; then
+            echo "::error::A tag $GITHUB_REF_NAME nao bate com a versao $version do src-tauri/Cargo.toml"
+            exit 1
+          fi
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Instalar a CLI do Tauri
+        run: npm install -g @tauri-apps/cli@^2
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ''
+        with:
+          tauriScript: tauri
+          tagName: v__VERSION__
+          releaseName: Openfy v__VERSION__
+          releaseBody: Veja o CHANGELOG.md para a lista de mudanças. Quem já tem o Openfy instalado recebe esta versão automaticamente.
+          releaseDraft: ${{ github.event_name == 'workflow_dispatch' }}
+          prerelease: false

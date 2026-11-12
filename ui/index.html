@@ -1,0 +1,85 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Openfy</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app">
+    <!-- A barra de cima e tambem a barra de titulo: areas com data-tauri-drag-region arrastam a janela. -->
+    <header class="topbar" data-tauri-drag-region>
+      <div class="brand" data-tauri-drag-region>
+        <img id="brand-logo" class="brand-logo" src="logo.png" width="34" height="34" alt="" draggable="false">
+        <span class="brand-name">Openfy</span>
+      </div>
+      <div class="top-center" data-tauri-drag-region>
+        <button id="btn-home" class="round-btn" data-icon="home" title="Início" aria-label="Início"></button>
+        <form id="search-form" class="search" role="search">
+          <span class="search-icon" data-icon="search" aria-hidden="true"></span>
+          <input id="search-input" type="search" autocomplete="off" spellcheck="false"
+                 placeholder="O que você quer ouvir?" aria-label="Buscar músicas">
+          <ul id="suggest" class="suggest" role="listbox" aria-label="Sugestões de busca" hidden></ul>
+        </form>
+      </div>
+      <div class="top-right" data-tauri-drag-region>
+        <button id="update-pill" class="update-pill" hidden></button>
+        <button id="win-min" class="win-btn" data-icon="winMin" title="Minimizar" aria-label="Minimizar"></button>
+        <button id="win-max" class="win-btn" data-icon="winMax" title="Maximizar" aria-label="Maximizar"></button>
+        <button id="win-close" class="win-btn win-close" data-icon="winClose" title="Fechar" aria-label="Fechar"></button>
+      </div>
+    </header>
+
+    <aside class="sidebar panel">
+      <div class="side-head">
+        <div class="side-title"><span data-icon="library" aria-hidden="true"></span>Sua Biblioteca</div>
+        <button id="btn-new-playlist" class="icon-btn" data-icon="plus" title="Criar playlist" aria-label="Criar playlist"></button>
+      </div>
+      <nav id="library-list" class="library-list" aria-label="Biblioteca"></nav>
+    </aside>
+
+    <main id="view" class="panel view"></main>
+
+    <aside id="queue-panel" class="panel queue-panel" hidden aria-label="Fila de reprodução"></aside>
+
+    <footer class="player">
+      <div class="now">
+        <img id="now-thumb" class="now-thumb" alt="" hidden>
+        <div class="now-text">
+          <div id="now-title" class="now-title"></div>
+          <div id="now-artist" class="now-artist"></div>
+        </div>
+        <button id="now-like" class="icon-btn" data-icon="heart" title="Curtir" aria-label="Curtir" hidden></button>
+      </div>
+
+      <div class="controls">
+        <div class="buttons">
+          <button id="btn-shuffle" class="icon-btn" data-icon="shuffle" title="Ordem aleatória" aria-label="Ordem aleatória"></button>
+          <button id="btn-prev" class="icon-btn" data-icon="prev" title="Anterior" aria-label="Anterior"></button>
+          <button id="btn-play" class="play-btn" data-icon="play" title="Tocar" aria-label="Tocar"></button>
+          <button id="btn-next" class="icon-btn" data-icon="next" title="Próxima" aria-label="Próxima"></button>
+          <button id="btn-repeat" class="icon-btn" data-icon="repeat" title="Repetir" aria-label="Repetir"></button>
+        </div>
+        <div class="seek">
+          <span id="time-cur" class="time">0:00</span>
+          <input id="seek" class="range" type="range" min="0" max="1000" value="0" disabled aria-label="Posição na faixa">
+          <span id="time-dur" class="time">0:00</span>
+        </div>
+      </div>
+
+      <div class="extras">
+        <button id="btn-queue" class="icon-btn" data-icon="queue" title="Fila" aria-label="Fila"></button>
+        <button id="btn-mute" class="icon-btn" data-icon="volume" title="Mudo" aria-label="Mudo"></button>
+        <input id="volume" class="range volume" type="range" min="0" max="100" value="80" aria-label="Volume">
+      </div>
+    </footer>
+  </div>
+
+  <div id="menu" class="menu" role="menu" hidden></div>
+  <div id="toast" class="toast" role="status" hidden></div>
+  <audio id="audio" preload="auto"></audio>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,22 @@
+# Build
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Configuracao local do Cargo (caminhos da maquina de cada pessoa)
+src-tauri/.cargo/config.toml
+
+# Chaves de assinatura do atualizador: nunca vao para o repositorio
+*.key
+*.key.pub
+
+# Ferramentas e editores
+.claude/
+.ruff_cache/
+.vscode/
+.idea/
+node_modules/
+
+# Sistema
+Thumbs.db
+desktop.ini
+.DS_Store

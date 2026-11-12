@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Falha de segurança
+    url: https://github.com/LucianoBarral/openfy/security/advisories/new
+    about: Relate de forma privada, sem abrir issue pública.
+  - name: Problema com um site ou vídeo específico
+    url: https://github.com/yt-dlp/yt-dlp/issues
+    about: Se o próprio yt-dlp falha na linha de comando, o problema é dele e deve ser relatado lá.

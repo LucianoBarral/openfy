@@ -1,0 +1,47 @@
+name: Bug
+description: Algo não funciona como deveria
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: O que aconteceu
+      description: Descreva o problema e o que você esperava no lugar.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Como reproduzir
+      placeholder: |
+        1. Busquei por "..."
+        2. Cliquei em ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Versão do Openfy
+      description: O número aparece no nome do instalador e em "Aplicativos instalados" do Windows.
+      placeholder: 0.1.0
+    validations:
+      required: true
+  - type: input
+    id: os
+    attributes:
+      label: Sistema operacional
+      placeholder: Windows 11 23H2
+    validations:
+      required: true
+  - type: input
+    id: ytdlp
+    attributes:
+      label: Versão do yt-dlp
+      description: Saída de `yt-dlp --version`. Muitos problemas de busca e reprodução somem ao atualizar o yt-dlp.
+      placeholder: "2026.01.01"
+  - type: textarea
+    id: extra
+    attributes:
+      label: Mais contexto
+      description: Mensagens de erro, capturas de tela ou qualquer detalhe que ajude.

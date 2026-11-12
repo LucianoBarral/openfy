@@ -1,0 +1,40 @@
+{
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "Openfy",
+  "identifier": "dev.openfy.app",
+  "build": {
+    "frontendDist": "../ui"
+  },
+  "app": {
+    "withGlobalTauri": true,
+    "windows": [
+      {
+        "title": "Openfy",
+        "decorations": false,
+        "width": 1280,
+        "height": 800,
+        "minWidth": 940,
+        "minHeight": 600,
+        "additionalBrowserArgs": "--disable-features=msWebOOUI,msPdfOOUI,msSmartScreenProtection --autoplay-policy=no-user-gesture-required"
+      }
+    ],
+    "security": {
+      "csp": "default-src 'self'; img-src 'self' data: https://*.ytimg.com https://*.ggpht.com https://*.googleusercontent.com; media-src https://*.googlevideo.com; style-src 'self' 'unsafe-inline'; connect-src ipc: http://ipc.localhost"
+    }
+  },
+  "bundle": {
+    "active": true,
+    "targets": ["nsis"],
+    "createUpdaterArtifacts": true,
+    "icon": ["icons/icon.ico"],
+    "shortDescription": "Player de música em Rust baseado em yt-dlp",
+    "license": "MIT",
+    "homepage": "https://github.com/LucianoBarral/openfy"
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDA2RDNDRjQyQjYwRDQ4OUYKUldTZlNBMjJRcy9UQnNuN2pFUU5WQ1Fqb3lZMHBFYXgyOG10T1NQSVNXSm5WbFc3TW5aRWl6dGIK",
+      "endpoints": ["https://github.com/LucianoBarral/openfy/releases/latest/download/latest.json"]
+    }
+  }
+}
