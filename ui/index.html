@@ -24,6 +24,7 @@
         </form>
       </div>
       <div class="top-right" data-tauri-drag-region>
+        <button id="engine-pill" class="update-pill engine-pill" hidden></button>
         <button id="update-pill" class="update-pill" hidden></button>
         <button id="win-min" class="win-btn" data-icon="winMin" title="Minimizar" aria-label="Minimizar"></button>
         <button id="win-max" class="win-btn" data-icon="winMax" title="Maximizar" aria-label="Maximizar"></button>
@@ -42,6 +43,7 @@
     <main id="view" class="panel view"></main>
 
     <aside id="queue-panel" class="panel queue-panel" hidden aria-label="Fila de reprodução"></aside>
+    <aside id="lyrics-panel" class="panel queue-panel lyrics-panel" hidden aria-label="Letra"></aside>
 
     <footer class="player">
       <div class="now">
@@ -69,6 +71,7 @@
       </div>
 
       <div class="extras">
+        <button id="btn-lyrics" class="icon-btn" data-icon="lyrics" title="Letra (L)" aria-label="Letra"></button>
         <button id="btn-queue" class="icon-btn" data-icon="queue" title="Fila" aria-label="Fila"></button>
         <button id="btn-mute" class="icon-btn" data-icon="volume" title="Mudo" aria-label="Mudo"></button>
         <input id="volume" class="range volume" type="range" min="0" max="100" value="80" aria-label="Volume">

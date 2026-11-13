@@ -4,8 +4,10 @@
 
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
@@ -111,10 +113,47 @@ impl StreamCache {
     }
 }
 
+/// Onde fica o yt-dlp que o proprio app baixa e mantem (definido uma vez, ao abrir).
+static MANAGED: OnceLock<PathBuf> = OnceLock::new();
+
+pub fn set_managed(path: PathBuf) {
+    let _ = MANAGED.set(path);
+}
+
+pub fn managed() -> Option<&'static Path> {
+    MANAGED.get().map(PathBuf::as_path)
+}
+
+/// Qual yt-dlp usar, nesta ordem: o de `OPENFY_YTDLP` (escolha explicita de quem
+/// roda o app), o gerenciado pelo app (se ja foi baixado), o do PATH.
+fn pick_program(env: Option<String>, managed: Option<&Path>) -> (OsString, &'static str) {
+    if let Some(exe) = env.filter(|p| !p.trim().is_empty()) {
+        return (exe.into(), "env");
+    }
+    match managed.filter(|p| p.is_file()) {
+        Some(path) => (path.into(), "managed"),
+        None => ("yt-dlp".into(), "path"),
+    }
+}
+
+fn program() -> (OsString, &'static str) {
+    pick_program(std::env::var("OPENFY_YTDLP").ok(), managed())
+}
+
+/// De onde vem o yt-dlp em uso: "env" | "managed" | "path".
+pub fn source() -> &'static str {
+    program().1
+}
+
+/// Versao do yt-dlp em uso (ex.: "2026.10.26"); erro se ele nao existe ou nao roda.
+pub fn version() -> Result<String, String> {
+    let mut cmd = yt_dlp();
+    cmd.arg("--version");
+    Ok(run(cmd)?.trim().to_string())
+}
+
 fn yt_dlp() -> Command {
-    // OPENFY_YTDLP aponta para um yt-dlp especifico (ex.: um venv mais novo que o do PATH).
-    let exe = std::env::var("OPENFY_YTDLP").ok().filter(|p| !p.trim().is_empty());
-    let mut cmd = Command::new(exe.as_deref().unwrap_or("yt-dlp"));
+    let mut cmd = Command::new(program().0);
     cmd.env("PYTHONIOENCODING", "utf-8").env("PYTHONUTF8", "1");
     #[cfg(windows)]
     {
@@ -128,7 +167,7 @@ fn yt_dlp() -> Command {
 fn run(mut cmd: Command) -> Result<String, String> {
     let out = cmd.output().map_err(|e| {
         if e.kind() == std::io::ErrorKind::NotFound {
-            "yt-dlp nao encontrado no PATH. Instale com: pip install -U yt-dlp".to_string()
+            "yt-dlp nao encontrado. O Openfy baixa o proprio yt-dlp ao abrir; verifique a internet e abra o app de novo.".to_string()
         } else {
             format!("falha ao executar yt-dlp: {e}")
         }
@@ -211,7 +250,7 @@ pub fn related(id: &str, limit: usize) -> Result<Vec<Track>, String> {
 }
 
 /// Codifica `text` para uso como valor de parametro numa URL.
-fn url_encode(text: &str) -> String {
+pub fn url_encode(text: &str) -> String {
     let mut out = String::with_capacity(text.len() * 3);
     for b in text.bytes() {
         if b.is_ascii_alphanumeric() || matches!(b, b'-' | b'_' | b'.' | b'~') {
@@ -275,6 +314,16 @@ pub fn resolve_stream(id: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escolhe_o_yt_dlp_na_ordem_certa() {
+        let here = std::env::current_exe().unwrap();
+        let missing = Path::new("nao-existe/yt-dlp");
+        assert_eq!(pick_program(Some("C:/meu/yt-dlp.exe".into()), Some(&here)).1, "env");
+        assert_eq!(pick_program(Some("  ".into()), Some(&here)), (here.clone().into_os_string(), "managed"));
+        assert_eq!(pick_program(None, Some(missing)), ("yt-dlp".into(), "path"), "gerenciado ainda nao baixado");
+        assert_eq!(pick_program(None, None).1, "path");
+    }
 
     #[test]
     fn valida_ids() {

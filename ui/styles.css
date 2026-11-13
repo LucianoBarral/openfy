@@ -46,7 +46,7 @@ svg { display: block; }
   gap: 8px;
   padding: 0 8px;
 }
-#app.queue-open {
+#app.queue-open, #app.lyrics-open {
   grid-template-columns: 300px minmax(0, 1fr) 300px;
   grid-template-areas: "top top top" "side main queue" "player player player";
 }
@@ -346,9 +346,45 @@ img.hero-art { object-fit: cover; }
 }
 .toast.error { background: #e5484d; color: #fff; }
 
+/* ---------- albuns, artistas e abas da busca ---------- */
+.chips.tabs { margin: -6px 0 8px; }
+.chip.on { background: var(--text); color: #000; font-weight: 600; }
+.card.round img, .card.round .card-blank { border-radius: 50%; }
+.card.round .card-title, .card.round .card-sub { text-align: center; }
+.lib-img { object-fit: cover; }
+.lib-tile.round { border-radius: 50%; }
+.follow-btn {
+  padding: 7px 16px; border-radius: 999px; border: 1px solid #6b6b74;
+  font-weight: 600; font-size: 13px; transition: border-color .15s, color .15s, transform .15s;
+}
+.follow-btn:hover { border-color: var(--text); transform: scale(1.04); }
+.follow-btn.on { border-color: var(--accent); color: var(--accent); }
+
+/* ---------- letra ---------- */
+/* position: relative faz do painel o offsetParent das linhas, que e de onde sai a rolagem. */
+.lyrics-panel { position: relative; padding: 16px 12px 32px; scroll-behavior: smooth; }
+.lyrics-track { display: flex; flex-direction: column; gap: 2px; margin: 4px 8px 16px; }
+.lyrics-track span { color: var(--muted); font-size: 13px; }
+.lyrics-lines { display: flex; flex-direction: column; gap: 2px; }
+.lyric {
+  padding: 7px 8px; border-radius: 6px; text-align: left; font-size: 17px; font-weight: 600;
+  line-height: 1.35; color: var(--muted); opacity: .6; transition: color .2s, opacity .2s;
+}
+.lyric:hover { opacity: 1; background: var(--elev); }
+.lyric.on { color: var(--text); opacity: 1; }
+.lyrics-plain { margin: 0 8px; white-space: pre-wrap; line-height: 1.6; user-select: text; }
+.lyrics-note { margin: 20px 8px 0; color: var(--muted); font-size: 12px; }
+.lyrics-panel .follow-btn { margin: 4px 8px; }
+
+/* ---------- motor de audio (yt-dlp) ---------- */
+.engine-pill { background: var(--elev); color: var(--text); font-weight: 600; }
+.engine-pill:hover:not(:disabled) { background: var(--hover); }
+.engine-pill.error { background: #5c2424; color: #fff; }
+.engine-pill.error:hover:not(:disabled) { background: #7a2e2e; }
+
 @media (max-width: 1100px) {
   #app { grid-template-columns: 240px minmax(0, 1fr); }
-  #app.queue-open { grid-template-columns: 240px minmax(0, 1fr) 260px; }
+  #app.queue-open, #app.lyrics-open { grid-template-columns: 240px minmax(0, 1fr) 260px; }
   .hero-art { width: 140px; height: 140px; }
 }
 @media (prefers-reduced-motion: reduce) {

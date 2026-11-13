@@ -9,7 +9,7 @@
 //! Tudo aqui e sincrono; quem chama roda em `spawn_blocking`.
 
 use crate::ytdl::{is_valid_id, Track};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
 
@@ -17,12 +17,17 @@ const ENDPOINT: &str = "https://music.youtube.com/youtubei/v1";
 const CLIENT_VERSION: &str = "1.20241106.01.00";
 /// Filtro "Musicas" da busca: so faixas do catalogo, sem videos nem playlists.
 const SONGS_FILTER: &str = "EgWKAQIIAWoMEAMQBBAJEA4QChAF";
+/// Os mesmos filtros para "Albuns" e "Artistas".
+const ALBUMS_FILTER: &str = "EgWKAQIYAWoMEAMQBBAJEA4QChAF";
+const ARTISTS_FILTER: &str = "EgWKAQIgAWoMEAMQBBAJEA4QChAF";
 const COVER_SMALL: u32 = 240;
 const COVER_LARGE: u32 = 544;
 const UNKNOWN_ARTIST: &str = "Desconhecido";
 
-/// Um album, single ou EP na pagina de um artista.
-#[derive(Serialize, Clone, Debug, PartialEq)]
+/// Um album, single ou EP na pagina de um artista, ou um resultado de busca
+/// (album ou artista) que leva a uma pagina.
+#[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
+#[serde(default)]
 pub struct Release {
     pub id: String,
     pub title: String,
@@ -281,6 +286,61 @@ pub fn parse_album(root: &Value, id: &str) -> Result<Album, String> {
     })
 }
 
+/// A playlist de audio do album, quando alguma faixa dele aponta para um
+/// clipe em vez da gravacao do album.
+fn video_album_playlist(root: &Value) -> Option<String> {
+    let items = find_all(root, "musicResponsiveListItemRenderer");
+    let is_video = |item: &&Value| {
+        find_all(item, "musicVideoType").iter().any(|t| t.as_str().is_some_and(|t| t != "MUSIC_VIDEO_TYPE_ATV"))
+    };
+    if !items.iter().any(is_video) {
+        return None;
+    }
+    items
+        .iter()
+        .flat_map(|item| find_all(item, "playlistId"))
+        .filter_map(Value::as_str)
+        .find(|p| p.starts_with("OLAK5uy_") && p.len() <= 64 && id_chars(p))
+        .map(str::to_string)
+}
+
+/// Troca o id de cada faixa pelo da gravacao de audio correspondente. As duas
+/// listas sao o mesmo album na mesma ordem; se os tamanhos diferem, nada muda.
+fn use_audio_ids(tracks: &mut [Track], audio: &[Track]) {
+    if tracks.len() != audio.len() {
+        return;
+    }
+    for (track, source) in tracks.iter_mut().zip(audio) {
+        track.id = source.id.clone();
+    }
+}
+
+/// Resultados de busca que levam a uma pagina (album ou artista). `accept`
+/// diz quais ids valem para o tipo pedido.
+pub fn parse_releases(root: &Value, accept: fn(&str) -> bool) -> Vec<Release> {
+    let mut seen = std::collections::HashSet::new();
+    find_all(root, "musicResponsiveListItemRenderer")
+        .into_iter()
+        .filter_map(|item| {
+            let id = item["navigationEndpoint"]["browseEndpoint"]["browseId"].as_str()?;
+            if !accept(id) || !seen.insert(id.to_string()) {
+                return None;
+            }
+            let mut columns = item["flexColumns"]
+                .as_array()?
+                .iter()
+                .map(|c| text(&c["musicResponsiveListItemFlexColumnRenderer"]["text"]));
+            let title = columns.next().filter(|t| !t.is_empty())?;
+            Some(Release {
+                id: id.to_string(),
+                title,
+                subtitle: columns.next().unwrap_or_default(),
+                cover: cover(&item["thumbnail"], COVER_SMALL),
+            })
+        })
+        .collect()
+}
+
 pub fn parse_artist(root: &Value, id: &str) -> Result<Artist, String> {
     let header = ["musicImmersiveHeaderRenderer", "musicVisualHeaderRenderer"]
         .iter()
@@ -351,7 +411,24 @@ pub fn album(id: &str) -> Result<Album, String> {
     if !is_album_id(id) {
         return Err(format!("id de album invalido: {id}"));
     }
-    parse_album(&post("browse", json!({ "browseId": id }))?, id)
+    let root = post("browse", json!({ "browseId": id }))?;
+    let mut album = parse_album(&root, id)?;
+    // O album pode listar o clipe de cada faixa. A playlist de audio do mesmo
+    // album traz as gravacoes certas; se ela falhar, ficam os ids do album.
+    if let Some(playlist) = video_album_playlist(&root) {
+        if let Ok(audio) = post("browse", json!({ "browseId": format!("VL{playlist}") })) {
+            use_audio_ids(&mut album.tracks, &parse_songs(&audio));
+        }
+    }
+    Ok(album)
+}
+
+pub fn search_albums(query: &str) -> Result<Vec<Release>, String> {
+    Ok(parse_releases(&post("search", json!({ "query": query, "params": ALBUMS_FILTER }))?, is_album_id))
+}
+
+pub fn search_artists(query: &str) -> Result<Vec<Release>, String> {
+    Ok(parse_releases(&post("search", json!({ "query": query, "params": ARTISTS_FILTER }))?, is_artist_id))
 }
 
 pub fn artist(id: &str) -> Result<Artist, String> {
@@ -520,5 +597,80 @@ mod tests {
             cover: Some("https://lh3.googleusercontent.com/r=w240-h240-p-l90-rj".into()),
         });
         assert!(parse_artist(&json!({}), ARTIST_ID).is_err());
+    }
+
+    /// Uma faixa de album como o catalogo devolve: o tipo do video e a playlist
+    /// do album ficam dentro do link do titulo.
+    fn album_track(id: &str, kind: &str, playlist: &str) -> Value {
+        let mut item = song(id, "Faixa", vec![]);
+        item["musicResponsiveListItemRenderer"]["flexColumns"][0]["musicResponsiveListItemFlexColumnRenderer"]["text"]["runs"][0]["navigationEndpoint"] = json!({ "watchEndpoint": {
+            "videoId": id,
+            "playlistId": playlist,
+            "watchEndpointMusicSupportedConfigs": { "watchEndpointMusicConfig": { "musicVideoType": kind } }
+        } });
+        item
+    }
+
+    #[test]
+    fn album_com_clipes_aponta_para_a_playlist_de_audio() {
+        const PLAYLIST: &str = "OLAK5uy_mz6eafmqdRHSaR4IwG0ll6J6rgv0_ZpGw";
+        let clipes = json!({
+            "outros": { "playlistId": "OLAK5uy_de_outro_lancamento_fora_das_faixas" },
+            "tracks": [
+                album_track("FGBhQbmPwH8", "MUSIC_VIDEO_TYPE_OMV", PLAYLIST),
+                album_track("IluRBvnYMoY", "MUSIC_VIDEO_TYPE_ATV", PLAYLIST),
+            ]
+        });
+        assert_eq!(video_album_playlist(&clipes).as_deref(), Some(PLAYLIST));
+
+        let so_audio = json!({ "tracks": [album_track("IluRBvnYMoY", "MUSIC_VIDEO_TYPE_ATV", PLAYLIST)] });
+        assert_eq!(video_album_playlist(&so_audio), None, "album que ja e de audio nao pede outra consulta");
+
+        let playlist_estranha = json!({ "tracks": [album_track("FGBhQbmPwH8", "MUSIC_VIDEO_TYPE_OMV", "PL; rm -rf")] });
+        assert_eq!(video_album_playlist(&playlist_estranha), None);
+    }
+
+    #[test]
+    fn ids_de_audio_so_entram_com_a_mesma_quantidade_de_faixas() {
+        let track = |id: &str, title: &str| Track {
+            id: id.into(), title: title.into(), artist: "Daft Punk".into(), duration: Some(320.0),
+            album: None, album_id: None, artist_id: None, cover: None,
+        };
+        let mut tracks = vec![track("FGBhQbmPwH8", "One More Time"), track("clipe000002", "Aerodynamic")];
+        use_audio_ids(&mut tracks, &[track("audio000001", "outro titulo")]);
+        assert_eq!(tracks[0].id, "FGBhQbmPwH8", "listas de tamanhos diferentes nao se misturam");
+
+        use_audio_ids(&mut tracks, &[track("audio000001", "x"), track("audio000002", "y")]);
+        assert_eq!((tracks[0].id.as_str(), tracks[1].id.as_str()), ("audio000001", "audio000002"));
+        assert_eq!(tracks[0].title, "One More Time", "so o id muda");
+    }
+
+    #[test]
+    fn busca_de_albuns_e_artistas_filtra_pelo_tipo_do_id() {
+        let result = |id: &str, title: &str, subtitle: &str| {
+            json!({ "musicResponsiveListItemRenderer": {
+                "thumbnail": thumbs("https://lh3.googleusercontent.com/capa=w120-h120-l90-rj"),
+                "navigationEndpoint": { "browseEndpoint": { "browseId": id } },
+                "flexColumns": [column(vec![json!({ "text": title })]), column(vec![json!({ "text": subtitle })])]
+            } })
+        };
+        let root = json!({ "contents": [
+            result(ALBUM_ID, "Random Access Memories", "Álbum • Daft Punk • 2013"),
+            result(ALBUM_ID, "repetido", "Álbum"),
+            result(ARTIST_ID, "Daft Punk", "Artista • 66,4 mi ouvintes mensais"),
+            result("MPREb_semtitulo1", "", "Álbum"),
+        ] });
+
+        let albums = parse_releases(&root, is_album_id);
+        assert_eq!(albums, vec![Release {
+            id: ALBUM_ID.into(),
+            title: "Random Access Memories".into(),
+            subtitle: "Álbum • Daft Punk • 2013".into(),
+            cover: Some("https://lh3.googleusercontent.com/capa=w240-h240-p-l90-rj".into()),
+        }]);
+
+        let artists = parse_releases(&root, is_artist_id);
+        assert_eq!(artists.len(), 1);
+        assert_eq!((artists[0].id.as_str(), artists[0].title.as_str()), (ARTIST_ID, "Daft Punk"));
     }
 }

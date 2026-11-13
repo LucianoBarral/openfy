@@ -1,12 +1,15 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod catalog;
+mod engine;
 mod library;
+mod lyrics;
 mod updater;
 mod ytdl;
 
-use library::{Library, Store};
+use library::{Library, Session, Store};
 use std::io::Write;
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{AppHandle, Manager, State};
@@ -137,7 +140,68 @@ fn remove_from_playlist(playlist_id: String, track_id: String, store: State<Stor
 
 #[tauri::command]
 fn push_history(track: Track, store: State<Store>) -> Result<Library, String> {
-    store.update(|l| l.push_history(track))
+    let now = SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    store.update(|l| l.push_history(track, now))
+}
+
+#[tauri::command]
+async fn search_albums(query: String) -> Result<Vec<catalog::Release>, String> {
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        return Ok(vec![]);
+    }
+    tauri::async_runtime::spawn_blocking(move || catalog::search_albums(&query))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
+async fn search_artists(query: String) -> Result<Vec<catalog::Release>, String> {
+    let query = query.trim().to_string();
+    if query.is_empty() {
+        return Ok(vec![]);
+    }
+    tauri::async_runtime::spawn_blocking(move || catalog::search_artists(&query))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
+/// Salva o album na biblioteca, ou tira se ja estava salvo.
+#[tauri::command]
+fn toggle_album(album: catalog::Release, store: State<Store>) -> Result<Library, String> {
+    store.update(|l| l.toggle_album(album))
+}
+
+/// Segue o artista, ou deixa de seguir.
+#[tauri::command]
+fn toggle_artist(artist: catalog::Release, store: State<Store>) -> Result<Library, String> {
+    store.update(|l| l.toggle_artist(artist))
+}
+
+/// Arquivo onde fica a sessao (fila, faixa e posicao) para o app reabrir onde parou.
+struct SessionFile(PathBuf);
+
+#[tauri::command]
+fn save_session(session: Session, file: State<SessionFile>) -> Result<(), String> {
+    library::save_session(&file.0, session)
+}
+
+#[tauri::command]
+fn load_session(file: State<SessionFile>) -> Option<Session> {
+    library::load_session(&file.0)
+}
+
+/// Letra da faixa (sincronizada quando existir). `None` = nao ha letra conhecida.
+#[tauri::command]
+async fn lyrics(
+    title: String,
+    artist: String,
+    album: Option<String>,
+    duration: Option<f64>,
+) -> Result<Option<lyrics::Lyrics>, String> {
+    tauri::async_runtime::spawn_blocking(move || lyrics::fetch(&title, &artist, album.as_deref(), duration))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 /// Autoteste ponta a ponta: com OPENFY_SELFTEST="consulta" a UI busca, toca o
@@ -196,7 +260,11 @@ fn main() {
             let dir = app.path().app_data_dir()?;
             std::fs::create_dir_all(&dir)?;
             app.manage(Store::load(dir.join("library.json")));
+            app.manage(SessionFile(dir.join("session.json")));
             app.manage(Arc::new(StreamCache::default()));
+            ytdl::set_managed(engine::managed_path(&dir));
+            app.manage(engine::EngineState::default());
+            engine::spawn(app.handle().clone());
             app.manage(updater::UpdateState::new(app.package_info().version.to_string()));
             updater::spawn(app.handle().clone());
             Ok(())
@@ -216,6 +284,15 @@ fn main() {
             add_to_playlist,
             remove_from_playlist,
             push_history,
+            search_albums,
+            search_artists,
+            toggle_album,
+            toggle_artist,
+            save_session,
+            load_session,
+            lyrics,
+            engine::ytdlp_state,
+            engine::ytdlp_install,
             selftest_query,
             selftest_report,
             updater::update_state,

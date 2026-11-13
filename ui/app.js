@@ -5,9 +5,9 @@ const $ = (id) => document.getElementById(id);
 const audio = $('audio');
 
 const state = {
-  lib: { liked: [], playlists: [], history: [] },
+  lib: { liked: [], playlists: [], history: [], albums: [], artists: [], plays: [] },
   route: { name: 'home' },
-  search: { query: '', status: 'idle', results: [], error: '' },
+  search: { query: '', status: 'idle', results: [], albums: [], artists: [], tab: 'all', error: '' },
   queue: [],          // contexto: a lista de onde a faixa atual veio
   userQueue: [],      // fila montada pelo usuario ("Adicionar à fila" / "Tocar a seguir")
   fromUserQueue: false,
@@ -27,6 +27,8 @@ const state = {
   failStreak: 0,
   lastError: '',
   queueOpen: false,
+  lyricsOpen: false,
+  engine: null,
 };
 
 /* ---------- icones (desenhados para o Openfy; f = preenchido, s = traco) ---------- */
@@ -53,6 +55,7 @@ const ICONS = {
   winMax: { s: 'M6.5 6.5h11v11h-11z' },
   winRestore: { s: 'M6 9h9v9H6zM9 9V6h9v9h-3' },
   winClose: { s: 'M6.5 6.5l11 11M17.5 6.5l-11 11' },
+  lyrics: { s: 'M4 6h16M4 11h11M4 16h8M18 12v7m0-7l3-1' },
 };
 
 function icon(name) {
@@ -324,12 +327,16 @@ function playAt(i) {
 /** Carrega e toca uma faixa, venha ela do contexto ou da fila do usuario. */
 async function start(track, isRetry = false) {
   const token = ++playToken;
+  // Retomada de sessao: a faixa restaurada volta do ponto em que parou.
+  const resumeAt = pendingSeek > 0 && track.id === resumeId ? pendingSeek : 0;
+  pendingSeek = 0;
   state.current = track;
   // Uma faixa que comeca a tocar nao deve continuar esperando na fila.
   state.userQueue = state.userQueue.filter((t) => t.id !== track.id);
   state.loading = true;
   state.retried = isRetry;
-  if (!isRetry) state.historyLogged = false;
+  // Retomar de onde parou nao conta como uma nova reproducao.
+  if (!isRetry) state.historyLogged = resumeAt > 0;
   state.played.add(track.id);
   state.heard.add(track.id);
   state.radioWaiting = false;
@@ -337,6 +344,8 @@ async function start(track, isRetry = false) {
   renderPlayer();
   markCurrent();
   renderQueue();
+  renderLyrics();
+  saveSession();
   ensureRadio();
   warmUpcoming();
 
@@ -352,6 +361,11 @@ async function start(track, isRetry = false) {
   }
   if (token !== playToken) return; // o usuario ja pediu outra faixa
   audio.src = url;
+  if (resumeAt) {
+    audio.addEventListener('loadedmetadata', () => {
+      if (token === playToken) audio.currentTime = resumeAt;
+    }, { once: true });
+  }
   // Se play() falhar por erro de midia, o evento 'error' abaixo cuida do retry.
   audio.play().catch(() => {});
 }
@@ -499,20 +513,39 @@ function setFill(el, pct) {
 
 function renderProgress() {
   const d = duration();
-  const cur = seeking ? (seek.value / 1000) * d : audio.currentTime;
+  const pos = position();
+  const cur = seeking ? (seek.value / 1000) * d : pos;
   $('time-cur').textContent = fmt(cur);
   $('time-dur').textContent = fmt(d);
-  if (!seeking) seek.value = d ? Math.round((audio.currentTime / d) * 1000) : 0;
+  if (!seeking) seek.value = d ? Math.round((pos / d) * 1000) : 0;
   setFill(seek, seek.value / 10);
 }
+
+/** Posicao atual; antes de o audio carregar, e o ponto guardado da sessao anterior. */
+function position() {
+  return audio.getAttribute('src') ? audio.currentTime : pendingSeek;
+}
+
+function seekTo(sec) {
+  const d = duration();
+  if (!state.current || !d) return;
+  const to = Math.max(0, Math.min(sec, d - 0.25));
+  if (audio.getAttribute('src')) {
+    audio.currentTime = to;
+  } else {
+    pendingSeek = to;
+    resumeId = state.current.id;
+  }
+  renderProgress();
+}
+const seekBy = (delta) => seekTo(position() + delta);
 
 audio.addEventListener('timeupdate', renderProgress);
 audio.addEventListener('durationchange', renderProgress);
 seek.addEventListener('input', () => { seeking = true; renderProgress(); });
 seek.addEventListener('change', () => {
-  const d = duration();
-  if (d) audio.currentTime = (seek.value / 1000) * d;
   seeking = false;
+  seekTo((seek.value / 1000) * duration());
   renderProgress();
 });
 
@@ -559,6 +592,7 @@ function renderPlayer() {
   rep.classList.toggle('one', state.repeat === 'one');
   rep.title = { off: 'Repetir', all: 'Repetindo a fila', one: 'Repetindo a faixa' }[state.repeat];
   $('btn-queue').classList.toggle('on', state.queueOpen);
+  $('btn-lyrics').classList.toggle('on', state.lyricsOpen);
 
   document.title = t ? `${t.title} • ${t.artist}` : 'Openfy';
   renderProgress();
@@ -580,13 +614,98 @@ $('btn-repeat').addEventListener('click', () => {
 $('now-like').addEventListener('click', () => {
   if (state.current) mutate('toggle_like', { track: state.current });
 });
-$('btn-queue').addEventListener('click', () => {
-  state.queueOpen = !state.queueOpen;
+/** Fila e letra dividem a mesma coluna: abrir um painel fecha o outro. */
+function openPanel(which) {
+  state.queueOpen = which === 'queue';
+  state.lyricsOpen = which === 'lyrics';
   $('app').classList.toggle('queue-open', state.queueOpen);
+  $('app').classList.toggle('lyrics-open', state.lyricsOpen);
   $('queue-panel').hidden = !state.queueOpen;
+  $('lyrics-panel').hidden = !state.lyricsOpen;
   renderQueue();
+  renderLyrics();
   renderPlayer();
-});
+}
+$('btn-queue').addEventListener('click', () => openPanel(state.queueOpen ? null : 'queue'));
+$('btn-lyrics').addEventListener('click', () => openPanel(state.lyricsOpen ? null : 'lyrics'));
+
+/* ---------- letra ---------- */
+const lyricsCache = new Map(); // id da faixa -> { status: 'loading'|'done'|'error', data, error }
+let lyricLine = -1;            // linha destacada agora
+
+function loadLyrics(track) {
+  lyricsCache.set(track.id, { status: 'loading', data: null, error: '' });
+  const isCurrent = state.current && state.current.id === track.id;
+  invoke('lyrics', {
+    title: track.title,
+    artist: track.artist,
+    album: track.album || null,
+    // A duracao separa a gravacao certa de outra versao da mesma musica.
+    duration: track.duration || (isCurrent ? duration() : 0) || null,
+  })
+    .then((data) => lyricsCache.set(track.id, { status: 'done', data, error: '' }))
+    .catch((e) => lyricsCache.set(track.id, { status: 'error', data: null, error: String(e) }))
+    .then(() => { if (state.current && state.current.id === track.id) renderLyrics(); });
+}
+
+function renderLyrics() {
+  if (!state.lyricsOpen) return;
+  const panel = $('lyrics-panel');
+  const t = state.current;
+  const body = [h('h3', null, 'Letra')];
+  const note = (text) => h('div', { class: 'q-empty' }, text);
+  lyricLine = -1;
+  if (!t) {
+    body.push(note('Toque uma música para ver a letra.'));
+  } else {
+    body.push(h('div', { class: 'lyrics-track' }, h('strong', null, t.title), h('span', null, t.artist)));
+    if (!lyricsCache.has(t.id)) loadLyrics(t);
+    const entry = lyricsCache.get(t.id);
+    const data = entry.data;
+    if (entry.status === 'loading') {
+      body.push(note('Buscando a letra…'));
+    } else if (entry.status === 'error') {
+      body.push(note('Não deu para buscar a letra agora.'),
+        h('button', { class: 'follow-btn', title: entry.error, onclick: () => { lyricsCache.delete(t.id); renderLyrics(); } }, 'Tentar de novo'));
+    } else if (!data) {
+      body.push(note('Ainda não há letra para esta faixa.'));
+    } else if (data.synced.length) {
+      body.push(h('div', { class: 'lyrics-lines' },
+        data.synced.map((line) => h('button', { class: 'lyric', onclick: () => seekTo(line.time) }, line.text || '♪'))));
+    } else if (data.plain) {
+      body.push(h('p', { class: 'lyrics-plain' }, data.plain), h('div', { class: 'lyrics-note' }, 'Letra sem sincronia.'));
+    } else {
+      body.push(note(data.instrumental ? 'Faixa instrumental.' : 'Ainda não há letra para esta faixa.'));
+    }
+    if (data) body.push(h('div', { class: 'lyrics-note' }, 'Letras: LRCLIB'));
+  }
+  panel.replaceChildren(...body);
+  panel.scrollTop = 0;
+  syncLyrics(true);
+}
+
+/** Destaca a linha que esta sendo cantada e a mantem no meio do painel. */
+function syncLyrics(jump = false) {
+  if (!state.lyricsOpen || !state.current) return;
+  const entry = lyricsCache.get(state.current.id);
+  const lines = entry && entry.data ? entry.data.synced : [];
+  if (!lines.length) return;
+  // Enquanto a faixa nova carrega, o <audio> ainda guarda a posicao da anterior.
+  const now = (state.loading ? 0 : position()) + 0.15;
+  let i = -1;
+  for (let k = 0; k < lines.length && lines[k].time <= now; k += 1) i = k;
+  if (i === lyricLine && !jump) return;
+  lyricLine = i;
+  const panel = $('lyrics-panel');
+  const els = panel.querySelectorAll('.lyric');
+  els.forEach((el, k) => el.classList.toggle('on', k === i));
+  const el = els[i];
+  if (!el) return;
+  const smooth = !jump && !window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  panel.scrollTo({ top: el.offsetTop - panel.clientHeight / 2 + el.clientHeight / 2, behavior: smooth ? 'smooth' : 'auto' });
+}
+audio.addEventListener('timeupdate', () => syncLyrics());
+audio.addEventListener('seeked', () => syncLyrics(true));
 
 function applyVolume(v, remember = true) {
   volume.value = v;
@@ -605,19 +724,99 @@ function updateMediaSession() {
   if (!('mediaSession' in navigator)) return;
   const t = state.current;
   if (!t) return;
+  navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing';
   if (navigator.mediaSession.metadata && navigator.mediaSession.metadata.title === t.title) return;
   navigator.mediaSession.metadata = new MediaMetadata({
     title: t.title,
     artist: t.artist,
+    album: t.album || '',
     artwork: [{ src: cover(t) }],
   });
 }
-if ('mediaSession' in navigator) {
-  navigator.mediaSession.setActionHandler('play', togglePlay);
-  navigator.mediaSession.setActionHandler('pause', togglePlay);
-  navigator.mediaSession.setActionHandler('nexttrack', next);
-  navigator.mediaSession.setActionHandler('previoustrack', prev);
+
+/** Conta ao sistema onde a faixa esta, para a barra do Windows mostrar o progresso. */
+function updatePositionState() {
+  if (!('mediaSession' in navigator) || !navigator.mediaSession.setPositionState) return;
+  const d = audio.duration;
+  if (!Number.isFinite(d) || d <= 0) return;
+  try {
+    navigator.mediaSession.setPositionState({
+      duration: d,
+      playbackRate: audio.playbackRate || 1,
+      position: Math.min(audio.currentTime, d),
+    });
+  } catch (_) { /* valores fora da faixa: o sistema fica sem a posicao */ }
 }
+['durationchange', 'seeked', 'playing', 'pause', 'ratechange'].forEach((ev) => audio.addEventListener(ev, updatePositionState));
+
+if ('mediaSession' in navigator) {
+  const actions = {
+    play: () => { if (audio.paused) togglePlay(); },
+    pause: () => audio.pause(),
+    nexttrack: next,
+    previoustrack: prev,
+    seekbackward: (d) => seekBy(-(d.seekOffset || 10)),
+    seekforward: (d) => seekBy(d.seekOffset || 10),
+    seekto: (d) => seekTo(d.seekTime),
+    stop: () => audio.pause(),
+  };
+  Object.entries(actions).forEach(([name, fn]) => {
+    // Cada WebView aceita um conjunto diferente de acoes; a que faltar nao derruba as outras.
+    try { navigator.mediaSession.setActionHandler(name, fn); } catch (_) { /* acao nao suportada */ }
+  });
+}
+
+/* ---------- retomar a sessao ---------- */
+// O app reabre na mesma faixa, fila e posicao, pausado: quem decide tocar e o usuario.
+let pendingSeek = 0;   // posicao guardada enquanto o audio ainda nao foi carregado
+let resumeId = '';     // faixa a que `pendingSeek` pertence
+let sessionReady = false; // so grava depois de ler a sessao anterior (senao apagaria ela)
+
+function snapshotSession() {
+  return {
+    queue: state.queue,
+    index: state.index,
+    current: state.current,
+    position: position(),
+    user_queue: state.userQueue,
+  };
+}
+
+function saveSession() {
+  if (!sessionReady || !state.current) return;
+  invoke('save_session', { session: snapshotSession() }).catch((e) => console.error(e));
+}
+
+function applySession(s) {
+  if (!s || !s.current) return false;
+  state.queue = s.queue || [];
+  state.userQueue = s.user_queue || [];
+  state.index = Number.isInteger(s.index) ? s.index : -1;
+  state.current = s.current;
+  const inContext = state.queue[state.index];
+  state.fromUserQueue = !(inContext && inContext.id === s.current.id);
+  state.played = new Set([s.current.id]);
+  state.heard.add(s.current.id);
+  const d = s.current.duration || 0;
+  const pos = Number(s.position) || 0;
+  pendingSeek = pos > 0 && (!d || pos < d - 5) ? pos : 0; // no finzinho, recomeca a faixa
+  resumeId = s.current.id;
+  state.loading = false;
+  renderPlayer();
+  renderProgress();
+  renderQueue();
+  renderLyrics();
+  markCurrent();
+  return true;
+}
+
+async function restoreSession() {
+  applySession(await invoke('load_session'));
+}
+
+audio.addEventListener('pause', saveSession);
+setInterval(() => { if (!audio.paused) saveSession(); }, 5000);
+window.addEventListener('beforeunload', saveSession);
 
 document.addEventListener('keydown', (e) => {
   const typing = e.target.matches('input, textarea');
@@ -634,6 +833,28 @@ document.addEventListener('keydown', (e) => {
   if (e.code === 'Space' && !typing && !e.target.matches('button')) {
     e.preventDefault();
     togglePlay();
+    return;
+  }
+  if (typing || e.altKey || e.metaKey || !$('menu').hidden) return;
+  const arrows = {
+    ArrowRight: () => (e.ctrlKey ? next() : seekBy(5)),
+    ArrowLeft: () => (e.ctrlKey ? prev() : seekBy(-5)),
+    // Sem Ctrl, as setas para cima/baixo continuam rolando a pagina.
+    ArrowUp: () => e.ctrlKey && applyVolume(Math.min(100, Number(volume.value) + 5)),
+    ArrowDown: () => e.ctrlKey && applyVolume(Math.max(0, Number(volume.value) - 5)),
+  };
+  if (arrows[e.key]) {
+    if (e.shiftKey || (!e.ctrlKey && (e.key === 'ArrowUp' || e.key === 'ArrowDown'))) return;
+    e.preventDefault();
+    arrows[e.key]();
+    return;
+  }
+  if (e.ctrlKey || e.shiftKey) return;
+  const buttons = { m: 'btn-mute', l: 'btn-lyrics', q: 'btn-queue', s: 'btn-shuffle', r: 'btn-repeat', f: 'now-like' };
+  const id = buttons[e.key.toLowerCase()];
+  if (id) {
+    e.preventDefault();
+    $(id).click();
   }
 });
 
@@ -739,6 +960,21 @@ function renderSidebar() {
       h('small', null, 'É rápido, e ela fica salva neste computador.'),
       h('button', { class: 'pill', onclick: () => createPlaylist() }, 'Criar playlist')));
   }
+  const saved = (kind, route, sub) => (state.lib[kind] || []).forEach((it) => {
+    const round = route === 'artist' ? ' round' : '';
+    items.push(h('button', {
+      class: `lib-item${r.name === route && r.id === it.id ? ' active' : ''}`,
+      onclick: () => go({ name: route, id: it.id }),
+    },
+      it.cover
+        ? h('img', { class: `lib-tile lib-img${round}`, src: it.cover, alt: '', loading: 'lazy' })
+        : h('div', { class: `lib-tile${round}`, icon: 'note' }),
+      h('div', { class: 'lib-text' },
+        h('div', { class: 'lib-name' }, it.title),
+        h('div', { class: 'lib-sub' }, sub(it)))));
+  });
+  saved('albums', 'album', (it) => (it.subtitle ? `Álbum • ${it.subtitle}` : 'Álbum'));
+  saved('artists', 'artist', () => 'Artista');
   $('library-list').replaceChildren(...items);
   $('btn-home').classList.toggle('active', r.name === 'home');
 }
@@ -747,6 +983,48 @@ $('btn-new-playlist').addEventListener('click', () => createPlaylist());
 
 /* ---------- telas ---------- */
 const GENRES = ['Pop', 'Rock', 'Sertanejo', 'Funk', 'MPB', 'Hip hop', 'Eletrônica', 'Jazz', 'Lo-fi', 'Pagode', 'Indie', 'Clássica'];
+
+function trackCard(t, sub) {
+  return h('button', { class: 'card', title: `Tocar ${t.title}`, onclick: () => playFrom([t], 0), ...hoverWarm(t) },
+    h('img', { src: cover(t), alt: '', loading: 'lazy' }),
+    h('span', { class: 'card-play', icon: 'play' }),
+    h('div', { class: 'card-title' }, t.title),
+    h('div', { class: 'card-sub' }, sub));
+}
+
+/** Faixas por numero de reproducoes; no empate, a ouvida mais recentemente vem antes. */
+function topPlays() {
+  return [...state.lib.plays].sort((a, b) => b.count - a.count || b.at - a.at);
+}
+
+/** Soma as reproducoes por artista. `plays` ja vem ordenado, entao a 1a faixa de cada um e a mais ouvida. */
+function topArtists(plays) {
+  const byKey = new Map();
+  plays.forEach((p) => {
+    const key = p.track.artist_id || p.track.artist;
+    if (!key) return;
+    let a = byKey.get(key);
+    if (!a) {
+      const followed = state.lib.artists.find((x) => x.id === p.track.artist_id);
+      // "Artista A, Artista B": o id pertence ao primeiro nome.
+      const name = p.track.artist.split(',')[0].trim();
+      a = { id: p.track.artist_id || '', name, count: 0, seed: p.track, cover: (followed && followed.cover) || cover(p.track) };
+      byKey.set(key, a);
+    }
+    a.count += p.count;
+  });
+  return [...byKey.values()].sort((a, b) => b.count - a.count);
+}
+
+async function playMix(seed) {
+  toast('Montando o mix…');
+  try {
+    const rel = await invoke('related', { id: seed.id });
+    playFrom([seed, ...rel.filter((t) => t.id !== seed.id)], 0);
+  } catch (e) {
+    fail(e);
+  }
+}
 
 function viewHome() {
   const hour = new Date().getHours();
@@ -760,21 +1038,44 @@ function viewHome() {
       h('button', { class: 'shortcut', onclick: () => go({ name: 'playlist', id: pl.id }) },
         playlistTile(pl), h('span', null, pl.name)))));
 
+  const shelf = (title, cards) => {
+    if (cards.length) page.append(h('h2', null, title), h('div', { class: 'cards' }, cards));
+  };
   const hist = state.lib.history;
-  page.append(h('h2', null, 'Tocadas recentemente'));
   if (hist.length) {
-    page.append(h('div', { class: 'cards' },
-      hist.slice(0, 12).map((t, i) =>
-        h('button', { class: 'card', title: `Tocar ${t.title}`, onclick: () => playFrom([t], 0), ...hoverWarm(t) },
-          h('img', { src: cover(t), alt: '', loading: 'lazy' }),
-          h('span', { class: 'card-play', icon: 'play' }),
-          h('div', { class: 'card-title' }, t.title),
-          h('div', { class: 'card-sub' }, t.artist)))));
+    shelf('Tocadas recentemente', hist.slice(0, 10).map((t) => trackCard(t, t.artist)));
   } else {
-    page.append(h('div', { class: 'empty' },
+    page.append(h('h2', null, 'Tocadas recentemente'), h('div', { class: 'empty' },
       h('strong', null, 'Nada tocado ainda'),
       'Busque uma música acima e o que você ouvir aparece aqui.'));
   }
+
+  // Tudo daqui para baixo sai das contagens reais gravadas na biblioteca.
+  const top = topPlays();
+  shelf('Mais tocadas', top.slice(0, 10).map((p) =>
+    trackCard(p.track, `${p.track.artist} · ${p.count} ${p.count === 1 ? 'reprodução' : 'reproduções'}`)));
+
+  const artists = topArtists(top);
+  shelf('Seus artistas mais ouvidos', artists.slice(0, 6).map((a) =>
+    h('button', {
+      class: 'card round',
+      title: a.name,
+      onclick: () => (a.id ? go({ name: 'artist', id: a.id }) : runSearch(a.name, true)),
+    },
+      h('img', { src: a.cover, alt: '', loading: 'lazy' }),
+      h('div', { class: 'card-title' }, a.name),
+      h('div', { class: 'card-sub' }, `${a.count} ${a.count === 1 ? 'reprodução' : 'reproduções'}`))));
+
+  // Um mix por artista: a faixa mais ouvida dele puxa as parecidas.
+  shelf('Mixes para você', artists.slice(0, 3).map((a) =>
+    h('button', { class: 'card', title: `Tocar o mix de ${a.seed.title}`, onclick: () => playMix(a.seed), ...hoverWarm(a.seed) },
+      h('img', { src: cover(a.seed), alt: '', loading: 'lazy' }),
+      h('span', { class: 'card-play', icon: 'play' }),
+      h('div', { class: 'card-title' }, `Mix de ${a.seed.title}`),
+      h('div', { class: 'card-sub' }, `Baseado em ${a.name}`))));
+
+  shelf('Seus álbuns', state.lib.albums.slice(0, 10).map((a) => releaseCard(a)));
+  shelf('Artistas que você segue', state.lib.artists.slice(0, 10).map((a) => releaseCard(a, 'artist')));
 
   page.append(h('h2', null, 'Explorar gêneros'),
     h('div', { class: 'chips' },
@@ -791,14 +1092,54 @@ function viewSearch() {
     page.append(h('h1', null, 'A busca falhou'),
       h('div', { class: 'error-box' }, h('strong', null, 'O yt-dlp respondeu com erro'), s.error),
       h('button', { class: 'pill', onclick: () => runSearch(s.query) }, 'Tentar de novo'));
-  } else if (!s.results.length) {
+  } else if (!s.results.length && !s.albums.length && !s.artists.length) {
     page.append(h('div', { class: 'empty' },
       h('strong', null, `Nenhum resultado para “${s.query}”`),
       'Confira a grafia ou tente outras palavras.'));
   } else {
-    page.append(h('h1', null, `Resultados para “${s.query}”`), trackList(s.results, { single: true }));
+    const tabs = [['all', 'Tudo'], ['tracks', 'Músicas'], ['albums', 'Álbuns'], ['artists', 'Artistas']];
+    page.append(h('h1', null, `Resultados para “${s.query}”`),
+      h('div', { class: 'chips tabs' }, tabs.map(([id, label]) =>
+        h('button', {
+          class: `chip${s.tab === id ? ' on' : ''}`,
+          onclick: () => { state.search.tab = id; renderView(); },
+        }, label))));
+    const all = s.tab === 'all';
+    const none = (what) => h('div', { class: 'empty' }, h('strong', null, `Nenhum ${what} para “${s.query}”`));
+    if ((all && s.artists.length) || s.tab === 'artists') {
+      page.append(h('h2', null, 'Artistas'), s.artists.length
+        ? h('div', { class: 'cards' }, (all ? s.artists.slice(0, 6) : s.artists).map((a) => releaseCard(a, 'artist')))
+        : none('artista'));
+    }
+    if ((all && s.albums.length) || s.tab === 'albums') {
+      page.append(h('h2', null, 'Álbuns'), s.albums.length
+        ? h('div', { class: 'cards' }, (all ? s.albums.slice(0, 6) : s.albums).map((a) => releaseCard(a)))
+        : none('álbum'));
+    }
+    if (all || s.tab === 'tracks') {
+      page.append(h('h2', null, 'Músicas'), s.results.length
+        ? trackList(s.results, { single: true })
+        : none('música'));
+    }
   }
   return page;
+}
+
+/* ---------- albuns salvos e artistas seguidos ---------- */
+const isSaved = (kind, id) => (state.lib[kind] || []).some((it) => it.id === id);
+
+/** Botao de salvar album (`kind` = 'albums') ou seguir artista ('artists'). */
+function saveButton(kind, item) {
+  const on = isSaved(kind, item.id);
+  const album = kind === 'albums';
+  const label = album ? (on ? 'Salvo' : 'Salvar') : (on ? 'Seguindo' : 'Seguir');
+  return h('button', {
+    class: `follow-btn${on ? ' on' : ''}`,
+    'aria-pressed': String(on),
+    onclick: () => (album
+      ? mutate('toggle_album', { album: item }, on ? 'Álbum removido da biblioteca' : 'Álbum salvo na biblioteca')
+      : mutate('toggle_artist', { artist: item }, on ? 'Você deixou de seguir' : `Seguindo ${item.title}`)),
+  }, label);
 }
 
 function playButton(tracks) {
@@ -953,7 +1294,8 @@ function viewAlbum(id) {
       meta,
       hue: hueOf(album.id),
     }),
-    h('div', { class: 'actions' }, playButton(album.tracks)));
+    h('div', { class: 'actions' }, playButton(album.tracks),
+      saveButton('albums', { id: album.id, title: album.title, subtitle: album.artist || '', cover: album.cover || '' })));
   frag.append(album.tracks.length
     ? trackList(album.tracks, { album: true })
     : h('div', { class: 'empty' }, h('strong', null, 'Este álbum veio sem faixas'),
@@ -961,8 +1303,13 @@ function viewAlbum(id) {
   return frag;
 }
 
-function releaseCard(item) {
-  return h('button', { class: 'card', title: item.title, onclick: () => go({ name: 'album', id: item.id }) },
+function releaseCard(item, kind = 'album') {
+  const artist = kind === 'artist';
+  return h('button', {
+    class: `card${artist ? ' round' : ''}`,
+    title: item.title,
+    onclick: () => go({ name: artist ? 'artist' : 'album', id: item.id }),
+  },
     item.cover ? h('img', { src: item.cover, alt: '', loading: 'lazy' }) : h('div', { class: 'card-blank', icon: 'note' }),
     h('div', { class: 'card-title' }, item.title),
     h('div', { class: 'card-sub' }, item.subtitle));
@@ -980,11 +1327,12 @@ function viewArtist(id) {
       meta: artist.top.length ? `${countLabel(artist.top.length)} em destaque` : '',
       hue: hueOf(artist.id),
     }),
-    h('div', { class: 'actions' }, playButton(artist.top)));
+    h('div', { class: 'actions' }, playButton(artist.top),
+      saveButton('artists', { id: artist.id, title: artist.name, subtitle: 'Artista', cover: artist.cover || '' })));
   const body = h('div', { class: 'page' });
   if (artist.top.length) body.append(h('h2', null, 'Populares'), trackList(artist.top));
   artist.shelves.forEach((shelf) => {
-    body.append(h('h2', null, shelf.title), h('div', { class: 'cards' }, shelf.items.map(releaseCard)));
+    body.append(h('h2', null, shelf.title), h('div', { class: 'cards' }, shelf.items.map((it) => releaseCard(it))));
   });
   if (!artist.top.length && !artist.shelves.length) {
     body.append(h('div', { class: 'empty' }, h('strong', null, 'Nada para mostrar'),
@@ -1082,23 +1430,33 @@ function renderQueue() {
 
 /* ---------- busca ---------- */
 let searchToken = 0;
+let searchExtras = Promise.resolve(); // o autoteste espera albuns/artistas por aqui
 
 async function runSearch(query, fillInput = false) {
   query = String(query).trim();
   if (!query) return;
   if (fillInput) $('search-input').value = query;
   const token = ++searchToken;
-  state.search = { query, status: 'loading', results: [], error: '' };
+  state.search = { query, status: 'loading', results: [], albums: [], artists: [], tab: 'all', error: '' };
   go({ name: 'search' });
+  // Albuns e artistas chegam por fora: a lista de musicas nao espera por eles.
+  const extra = (cmd, key) => invoke(cmd, { query })
+    .then((items) => {
+      if (token !== searchToken) return;
+      state.search[key] = items;
+      if (state.route.name === 'search' && state.search.status === 'done') renderView();
+    })
+    .catch((e) => console.error(e));
+  searchExtras = Promise.all([extra('search_albums', 'albums'), extra('search_artists', 'artists')]);
   try {
     const results = await invoke('search', { query });
     if (token !== searchToken) return;
-    state.search = { query, status: 'done', results, error: '' };
+    state.search = { ...state.search, status: 'done', results };
     // Os primeiros resultados sao os mais clicados: ja ficam prontos para tocar.
     results.slice(0, 6).forEach((t) => prewarm(t));
   } catch (e) {
     if (token !== searchToken) return;
-    state.search = { query, status: 'error', results: [], error: typeof e === 'string' ? e : String(e) };
+    state.search = { ...state.search, status: 'error', results: [], error: typeof e === 'string' ? e : String(e) };
   }
   if (state.route.name === 'search') renderView();
 }
@@ -1237,6 +1595,27 @@ function onUpdateState(info) {
 updatePill.addEventListener('click', installUpdate);
 window.__TAURI__.event.listen('update-state', (e) => onUpdateState(e.payload)).catch((e) => console.error(e));
 
+/* ---------- motor de audio (yt-dlp gerenciado pelo app) ---------- */
+const enginePill = $('engine-pill');
+
+function onEngineState(info) {
+  if (!info) return;
+  state.engine = info;
+  const downloading = info.status === 'downloading';
+  const broken = info.status === 'error';
+  enginePill.hidden = !downloading && !broken;
+  enginePill.disabled = downloading;
+  enginePill.classList.toggle('error', broken);
+  enginePill.textContent = downloading ? 'Baixando o motor de áudio…' : 'Motor de áudio indisponível — tentar de novo';
+  enginePill.title = broken ? info.error || '' : '';
+  // Pronto, mas com aviso (ex.: nao deu para conferir se ha versao nova): so registra.
+  if (info.status === 'ready' && info.error) console.warn(`yt-dlp: ${info.error}`);
+}
+enginePill.addEventListener('click', () => {
+  invoke('ytdlp_install').then(onEngineState).catch(fail);
+});
+window.__TAURI__.event.listen('ytdlp-state', (e) => onEngineState(e.payload)).catch((e) => console.error(e));
+
 /* ---------- autoteste ponta a ponta (so roda com OPENFY_SELFTEST definido) ---------- */
 async function selftest() {
   const query = await invoke('selftest_query');
@@ -1252,6 +1631,8 @@ async function selftest() {
       return;
     }
     await report(`SEARCH n=${s.results.length} first=${s.results[0].title} | ${s.results[0].artist}`);
+    await searchExtras;
+    await report(`SEARCH-EXTRA albums=${s.albums.length} artists=${s.artists.length} firstAlbum=${(s.albums[0] || {}).title} firstArtist=${(s.artists[0] || {}).title} cards=${document.querySelectorAll('#view .card').length} roundCards=${document.querySelectorAll('#view .card.round').length} tabs=${document.querySelectorAll('#view .tabs .chip').length}`);
     await selftestCatalog(report, s.results).catch((e) => report(`CATALOG exception ${e}`));
     playFrom(s.results, 0);
     const timer = setInterval(() => {
@@ -1265,6 +1646,8 @@ async function selftest() {
           .catch((e) => report(`QUEUE exception ${e}`))
           .then(() => selftestExtras(report, s.results))
           .catch((e) => report(`EXTRAS exception ${e}`))
+          .then(() => selftestNew(report))
+          .catch((e) => report(`NEW exception ${e}`))
           .then(() => report(done));
       } else if (ms > 60000) {
         clearInterval(timer);
@@ -1394,6 +1777,144 @@ async function selftestExtras(report, results) {
   await sleep(700);
   const after = await appWindow.isMaximized();
   await report(`WINDOW decorated=${await appWindow.isDecorated().catch(() => '?')} max=${before}>${during}>${after} label=${titleDuring}>${$('win-max').title} logo=${$('brand-logo').naturalWidth}x${$('brand-logo').naturalHeight} font=${getComputedStyle(document.querySelector('.brand-name')).fontFamily.split(',')[0]}`);
+}
+
+/** Exercita o que entrou nos itens 1 a 5: biblioteca, versao da faixa, letra, motor, atalhos, sessao e inicio. */
+async function selftestNew(report) {
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const until = async (test, ms) => {
+    const t0 = performance.now();
+    while (!test() && performance.now() - t0 < ms) await sleep(100);
+    return test();
+  };
+  const step = async (name, fn) => {
+    try { await report(`${name} ${await fn()}`); } catch (e) { await report(`${name} exception ${e}`); }
+  };
+  const key = (k, extra = {}) => document.body.dispatchEvent(new KeyboardEvent('keydown', { key: k, bubbles: true, cancelable: true, ...extra }));
+
+  // Versao do album: a faixa tem de ser a gravacao do album, nao o clipe (radio edit).
+  let albumData = null;
+  await step('ALBUM-ATV', async () => {
+    albumData = await invoke('album', { id: 'MPREb_7ltM34kr0mH' });
+    const t = albumData.tracks[0];
+    return `album=${albumData.title} tracks=${albumData.tracks.length} first=${t.title} id=${t.id} duration=${t.duration} isClip=${t.id === 'FGBhQbmPwH8'}`;
+  });
+
+  // Salvar album e seguir artista: liga, confere, desliga — a biblioteca termina como estava.
+  await step('SAVE', async () => {
+    const rel = { id: albumData.id, title: albumData.title, subtitle: albumData.artist || '', cover: albumData.cover || null };
+    const before = isSaved('albums', rel.id);
+    await mutate('toggle_album', { album: rel });
+    const mid = isSaved('albums', rel.id);
+    const tiles = document.querySelectorAll('.lib-tile').length;
+    await mutate('toggle_album', { album: rel });
+    return `album=${before}>${mid}>${isSaved('albums', rel.id)} tilesMid=${tiles} tilesAfter=${document.querySelectorAll('.lib-tile').length}`;
+  });
+  await step('FOLLOW', async () => {
+    const found = await invoke('search_artists', { query: 'daft punk' });
+    const rel = found[0];
+    const before = isSaved('artists', rel.id);
+    await mutate('toggle_artist', { artist: rel });
+    const mid = isSaved('artists', rel.id);
+    await mutate('toggle_artist', { artist: rel });
+    return `artist=${rel.title} ${before}>${mid}>${isSaved('artists', rel.id)}`;
+  });
+
+  // Toca a faixa do album para os testes de letra, atalhos e retomada.
+  const track = albumData.tracks[0];
+  playFrom(albumData.tracks, 0);
+  await until(() => state.current && state.current.id === track.id && !state.loading && audio.currentTime > 1, 40000);
+  await report(`ALBUM-PLAY title=${state.current.title} audioDuration=${Math.round(audio.duration)} listed=${track.duration} t=${audio.currentTime.toFixed(1)}`);
+
+  // Letra: so contagens, nunca o texto.
+  await step('LYRICS', async () => {
+    const l = await invoke('lyrics', { title: track.title, artist: track.artist, album: track.album || null, duration: track.duration || null });
+    return l ? `synced=${l.synced.length} plainChars=${l.plain.length} instrumental=${l.instrumental} firstAt=${l.synced.length ? l.synced[0].time : '-'}` : 'none';
+  });
+  await step('LYRICS-UI', async () => {
+    $('btn-lyrics').click();
+    await until(() => (lyricsCache.get(track.id) || {}).status !== 'loading' && lyricsCache.has(track.id), 12000);
+    await sleep(300);
+    const panel = $('lyrics-panel');
+    const lines = panel.querySelectorAll('.lyric');
+    const last = lyricsCache.get(track.id).data;
+    const at = last && last.synced.length ? last.synced[Math.min(3, last.synced.length - 1)].time : 0;
+    if (lines.length) { lines[Math.min(3, lines.length - 1)].click(); await sleep(900); }
+    const out = `open=${!panel.hidden} status=${lyricsCache.get(track.id).status} lines=${lines.length} on=${panel.querySelectorAll('.lyric.on').length} clickSeek=${at.toFixed(1)}>${audio.currentTime.toFixed(1)} width=${panel.clientWidth} btnOn=${$('btn-lyrics').classList.contains('on')}`;
+    $('btn-lyrics').click();
+    return `${out} closed=${panel.hidden}`;
+  });
+
+  await step('ENGINE', async () => {
+    const e = await invoke('ytdlp_state');
+    return `status=${e.status} source=${e.source} version=${e.version} error=${e.error} pillHidden=${enginePill.hidden}`;
+  });
+
+  await step('KEYS', async () => {
+    const t0 = audio.currentTime;
+    key('ArrowRight');
+    await sleep(700);
+    const fwd = audio.currentTime - t0;
+    const v0 = audio.volume;
+    key('ArrowDown', { ctrlKey: true });
+    const v1 = audio.volume;
+    key('ArrowUp', { ctrlKey: true });
+    key('m');
+    const muted = audio.volume === 0 || audio.muted;
+    key('m');
+    key('l');
+    const lyr = state.lyricsOpen;
+    key('q');
+    const que = state.queueOpen;
+    key('q');
+    const liked0 = isLiked(track.id);
+    key('f');
+    await sleep(500);
+    const liked1 = isLiked(track.id);
+    key('f');
+    await sleep(500);
+    return `right=+${fwd.toFixed(1)}s volume=${v0.toFixed(2)}>${v1.toFixed(2)}>${audio.volume.toFixed(2)} mute=${muted} l=${lyr} q=${que} panelsClosed=${!state.queueOpen && !state.lyricsOpen} like=${liked0}>${liked1}>${isLiked(track.id)}`;
+  });
+  await step('MEDIA', async () => {
+    const ms = navigator.mediaSession;
+    const meta = ms.metadata;
+    return `state=${ms.playbackState} title=${meta && meta.title} artist=${meta && meta.artist} album=${meta && meta.album} art=${meta ? meta.artwork.length : 0}`;
+  });
+
+  // Sessao: grava uma de teste, le de volta e devolve o arquivo ao que era.
+  await step('SESSION', async () => {
+    const original = await invoke('load_session');
+    const mine = { ...snapshotSession(), position: 42 };
+    await invoke('save_session', { session: mine });
+    const back = await invoke('load_session');
+    await invoke('save_session', { session: original || { queue: [], index: -1, current: null, position: 0, user_queue: [] } });
+    const restored = await invoke('load_session');
+    return `hadOriginal=${!!original} saved=${back && back.current && back.current.id === track.id} position=${back && back.position} queue=${back && back.queue.length} restoredSame=${JSON.stringify(restored && restored.current && restored.current.id) === JSON.stringify(original && original.current && original.current.id)}`;
+  });
+
+  // Retomada: simula o app reabrindo (sem audio carregado) e da play.
+  await step('RESUME', async () => {
+    const snap = { ...snapshotSession(), position: 42 };
+    audio.pause();
+    audio.removeAttribute('src');
+    audio.load();
+    const ok = applySession(snap);
+    const label = $('time-cur').textContent;
+    const paused = audio.paused;
+    togglePlay();
+    await until(() => !state.loading && !audio.paused && audio.currentTime > 40, 40000);
+    return `applied=${ok} label=${label} pausedBefore=${paused} resumedAt=${audio.currentTime.toFixed(1)} title=${state.current.title}`;
+  });
+
+  await step('HOME', async () => {
+    audio.pause();
+    go({ name: 'home' });
+    await sleep(400);
+    const titles = [...document.querySelectorAll('#view h2')].map((x) => x.textContent).join(' | ');
+    const plays = state.lib.plays;
+    const top = topPlays()[0];
+    return `shelves=${titles} cards=${document.querySelectorAll('#view .card').length} round=${document.querySelectorAll('#view .card.round').length} plays=${plays.length} topCount=${top ? top.count : 0} history=${state.lib.history.length}`;
+  });
 }
 
 /** Monta uma fila sobre os resultados da busca e relata o painel e a ordem realmente tocada. */
@@ -1550,6 +2071,11 @@ async function init() {
   renderPlayer();
   // O evento pode ter saido antes de a pagina escutar: pega o estado atual tambem.
   invoke('update_state').then(onUpdateState).catch((e) => console.error(e));
+  invoke('ytdlp_state').then(onEngineState).catch((e) => console.error(e));
+  // No autoteste a sessao do usuario fica intocada: nem e lida, nem e regravada.
+  const testing = await invoke('selftest_query').catch(() => null);
+  if (!testing) await restoreSession().catch((e) => console.error(e));
+  sessionReady = !testing;
   selftest().catch((e) => console.error(e));
 }
 
