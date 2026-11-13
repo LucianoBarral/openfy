@@ -5,6 +5,8 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Não lançado]
 
+## [0.3.0]
+
 ### Adicionado
 
 - Busca com abas: Tudo, Músicas, Álbuns e Artistas.
@@ -55,6 +57,7 @@ Primeira versão pública.
 - Barra de título integrada à janela.
 - Atualização automática assinada a partir das releases do GitHub.
 
-[Não lançado]: https://github.com/LucianoBarral/openfy/compare/v0.2.0...HEAD
+[Não lançado]: https://github.com/LucianoBarral/openfy/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/LucianoBarral/openfy/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/LucianoBarral/openfy/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/LucianoBarral/openfy/releases/tag/v0.1.0
