@@ -7,14 +7,18 @@ O Openfy é um app [Tauri v2](https://tauri.app): um processo em Rust que abre u
 │ index.html · styles.css · app.js                │
 │ <audio> toca a URL de stream                    │
 └──────────┬──────────────────────────▲───────────┘
-           │ invoke("comando", args)  │ evento "update-state"
+           │ invoke("comando", args)  │ eventos "update-state"
+           │                          │ e "ytdlp-state"
 ┌──────────▼──────────────────────────┴───────────┐
 │ main.rs — comandos Tauri                        │
 ├────────────┬──────────┬──────────────┬──────────┤
 │ catalog.rs │ ytdl.rs  │ library.rs   │updater.rs│
 │ YouTube    │ yt-dlp   │ library.json │ GitHub   │
-│ Music      │          │              │ Releases │
-└────────────┴──────────┴──────────────┴──────────┘
+│ Music      │          │ session.json │ Releases │
+├────────────┼──────────┴──────────────┴──────────┤
+│ lyrics.rs  │ engine.rs                          │
+│ LRCLIB     │ baixa e atualiza o yt-dlp (GitHub) │
+└────────────┴────────────────────────────────────┘
 ```
 
 ## Backend (`src-tauri/src`)
@@ -28,12 +32,16 @@ A única regra que mora aqui é `or_fallback`: `search` e `related` perguntam pr
 | Comando | O que faz |
 | --- | --- |
 | `search` | Busca faixas (catálogo, com reserva no yt-dlp) |
+| `search_albums`, `search_artists` | Busca álbuns e artistas (só catálogo) |
 | `suggest` | Sugestões para o texto digitado |
 | `related` | Faixas parecidas com uma faixa (rádio automática; catálogo, com reserva no yt-dlp) |
 | `album` | Página de um álbum: capa, ano e faixas |
 | `artist` | Página de um artista: populares, álbuns, singles e EPs |
 | `resolve_stream` | URL de áudio de uma faixa, com cache |
-| `get_library`, `toggle_like`, `push_history` | Biblioteca |
+| `lyrics` | Letra da faixa, sincronizada quando existe |
+| `get_library`, `toggle_like`, `toggle_album`, `toggle_artist`, `push_history` | Biblioteca |
+| `save_session`, `load_session` | Sessão: faixa, posição e fila para retomar ao abrir |
+| `ytdlp_state`, `ytdlp_install` | Estado do yt-dlp gerenciado e nova tentativa de download |
 | `create_playlist`, `rename_playlist`, `delete_playlist`, `add_to_playlist`, `remove_from_playlist` | Playlists |
 | `update_state`, `update_install` | Atualização automática |
 | `selftest_query`, `selftest_report` | Autoteste ponta a ponta |
@@ -49,16 +57,35 @@ O catálogo: fala com a API web do YouTube Music por HTTP, sem conta e sem chave
 
 ### `ytdl.rs`
 
-A ponte com o yt-dlp: resolve a URL de áudio, busca sugestões e serve de reserva para a busca e o rádio. Monta a linha de comando, executa e interpreta o JSON que volta. O executável vem do `PATH` ou da variável `OPENFY_YTDLP`.
+A ponte com o yt-dlp: resolve a URL de áudio, busca sugestões e serve de reserva para a busca e o rádio. Monta a linha de comando, executa e interpreta o JSON que volta. O executável é escolhido nesta ordem: a variável `OPENFY_YTDLP`, depois o yt-dlp gerenciado pelo app (se o arquivo existir), depois o `yt-dlp` do `PATH`.
 
 Dois detalhes importam:
 
 - **IDs são validados** (`is_valid_id`) antes de virar argumento de processo. Nada que venha da interface chega ao yt-dlp sem passar por essa checagem.
 - **`StreamCache`** guarda as URLs de áudio já resolvidas e junta pedidos simultâneos da mesma faixa em uma única chamada ao yt-dlp. É isso que permite o pré-carregamento: a interface pede a URL das faixas visíveis antes do clique, e o play encontra a resposta pronta. Como essas URLs expiram, `resolve_stream` aceita `force` para ignorar o cache.
 
+### `engine.rs`
+
+O yt-dlp gerenciado pelo app. Uma thread roda ao abrir e a cada 24 horas: baixa o `SHA2-256SUMS` da última release do yt-dlp no GitHub, compara com o SHA-256 do arquivo local (`bin/yt-dlp.exe` na pasta de dados) e só baixa o binário quando os dois diferem.
+
+- **O arquivo só é instalado se o hash bater.** O download vai para um arquivo temporário, com limite de tamanho; se o SHA-256 não for o da lista, ele é descartado e o binário anterior continua em uso.
+- **Isso é integridade, não autenticidade.** A lista de hashes vem da mesma release que o binário, então a checagem pega download corrompido ou cortado, mas não protege contra uma release adulterada na origem. A confiança é no repositório do yt-dlp, por HTTPS.
+- **Quem define `OPENFY_YTDLP` fica no controle.** Com a variável definida nada é baixado, e `ytdlp_install` devolve erro.
+- Builds de desenvolvimento não baixam, a menos que `OPENFY_YTDLP_MANAGE=1`.
+
+O estado (`checking`, `downloading`, `ready`, `error`), a origem do executável em uso (`env`, `managed`, `path`) e a versão vão para a interface pelo evento `ytdlp-state`.
+
+### `lyrics.rs`
+
+Busca a letra no [LRCLIB](https://lrclib.net), enviando título, artista, álbum e duração da faixa. A interface não fala com a rede (a CSP só libera o IPC), então o pedido passa pelo comando `lyrics`.
+
+`pick` escolhe, entre os registros devolvidos, um com duração a até 5 segundos da faixa, preferindo os que têm letra sincronizada; `parse_lrc` transforma o texto LRC em linhas com o tempo em segundos. Quando só existe letra sem tempo, ela é devolvida como texto simples e a interface mostra sem destaque de linha.
+
 ### `library.rs`
 
-`Library` é a estrutura com curtidas, playlists e histórico; `Store` cuida de carregar e gravar o `library.json` na pasta de dados do app (no Windows, `%APPDATA%\dev.openfy.app`). Toda alteração passa por `Store::update`, que aplica a mudança, grava em disco e devolve a biblioteca nova — a interface nunca mantém uma cópia que possa divergir.
+`Library` é a estrutura com curtidas, playlists, álbuns salvos, artistas seguidos, histórico e a contagem de vezes que cada faixa tocou (é dela que sai o início personalizado); `Store` cuida de carregar e gravar o `library.json` na pasta de dados do app (no Windows, `%APPDATA%\dev.openfy.app`). Toda alteração passa por `Store::update`, que aplica a mudança, grava em disco e devolve a biblioteca nova — a interface nunca mantém uma cópia que possa divergir.
+
+A sessão (faixa atual, posição e fila) fica em um arquivo separado, `session.json`, gravado por `save_session` e lido por `load_session`. Ela muda muito mais vezes que a biblioteca, e mantê-la à parte evita regravar a biblioteca inteira a cada poucos segundos.
 
 ### `updater.rs`
 
@@ -72,6 +99,8 @@ HTML, CSS e JavaScript puros, sem framework e sem etapa de build. O Tauri embute
 
 `app.js` guarda o estado da reprodução (faixa atual, fila do usuário, fila automática, histórico da sessão) e desenha as telas: início, busca, curtidas, playlist, álbum e artista. Artista e álbum de cada faixa são links para essas páginas, tanto nas listas quanto no player. O áudio toca em um elemento `<audio>` comum, apontado para a URL devolvida por `resolve_stream`.
 
+O início é montado no próprio `app.js` a partir da biblioteca (tocadas recentemente, mais tocadas, artistas mais ouvidos, álbuns salvos e mixes); nada disso sai do computador. As teclas de mídia usam a Media Session da WebView, e os atalhos de teclado ficam em um único ouvinte de `keydown`, que ignora teclas digitadas em campos de texto.
+
 A reprodução segue esta ordem quando uma faixa termina:
 
 1. próxima faixa da **fila do usuário**, se houver;
@@ -80,7 +109,7 @@ A reprodução segue esta ordem quando uma faixa termina:
 
 ## Decisões de projeto
 
-- **yt-dlp como processo externo, não como biblioteca.** Os sites mudam o tempo todo; quem usa o app atualiza o yt-dlp sem esperar uma release do Openfy.
+- **yt-dlp como processo externo, não como biblioteca.** Os sites mudam o tempo todo; o app troca o próprio yt-dlp sozinho (`engine.rs`), sem esperar uma release do Openfy.
 - **Catálogo para os metadados, yt-dlp para o áudio.** A busca de vídeos devolve títulos sujos e resultados repetidos; o catálogo devolve faixas, álbuns e artistas. O yt-dlp continua sendo o único caminho até o áudio e a reserva quando o catálogo falha.
 - **Sem framework na interface.** O app é uma tela só. Sem dependências de front-end não há etapa de build nem `node_modules` para manter.
 - **Biblioteca em JSON.** O volume de dados é pequeno e um arquivo legível permite backup e inspeção com qualquer editor.

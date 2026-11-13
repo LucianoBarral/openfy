@@ -5,6 +5,26 @@ O formato segue o [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/) e 
 
 ## [Não lançado]
 
+### Adicionado
+
+- Busca com abas: Tudo, Músicas, Álbuns e Artistas.
+- Salvar álbuns e seguir artistas; eles aparecem na biblioteca e no início.
+- Letras sincronizadas com a música (tecla L), com clique na linha para pular
+  até aquele trecho. As letras vêm do LRCLIB.
+- Teclas de mídia do teclado e os controles de mídia do sistema, com título,
+  artista, álbum e capa da faixa.
+- Atalhos de teclado: espaço, setas, Ctrl+setas, M, L, Q, S, R, F e Ctrl+K.
+- O app retoma de onde parou: faixa, posição e fila voltam ao abrir (em pausa).
+- yt-dlp gerenciado pelo app: o Openfy baixa e mantém o próprio yt-dlp, sem
+  precisar instalar nada antes.
+- Início personalizado: tocadas recentemente, mais tocadas, seus artistas mais
+  ouvidos e mixes montados a partir do que você escuta.
+
+### Corrigido
+
+- A página de álbum tocava o videoclipe em vez da faixa do álbum, com duração
+  diferente da listada.
+
 ## [0.2.0]
 
 ### Adicionado
